@@ -1,0 +1,18 @@
+language: python
+sudo: false
+
+env:
+    global: 
+        - PIP_DEPS="pytest coveralls pytest-cov flake8"
+
+python:
+    - '3.6'
+
+
+install:
+    - travis_retry pip install $PIP_DEPS
+    - travis_retry pip install -e .
+
+script:
+    - echo
+      #- flake8 --ignore N802,N806 `find . -name \*.py | grep -v setup.py | grep -v version.py | grep -v __init__.py | grep -v /doc/`
