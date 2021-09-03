@@ -839,10 +839,23 @@ class hs:
         return mash
 
     def get_xb_frac_in_states(self):
-        """Calculate the fraction of cross-bridges in each state"""
+        """Calculate the fraction of cross-bridges in each state
+        
+        see https://doi.org/10.1085/jgp.202012604 page 5
+        
+        SRX = parked state PS
+        DRX = M.D.Pi
+        loose = A.M.D.Pi
+        tight_1 = A.M.D
+        tight_2 = A.M
+        free_2 = M.T
+        
+        {"DRX": 1, "loose": 2, "tight_1": 3, "tight_2": 4, "free_2": 5, "SRX": 6}
+        
+        """
         nested = [t.get_states() for t in self.thick]
         xb_states = [xb for fil in nested for face in fil for xb in face]
-        num_in_state = [xb_states.count(state) for state in range(3)]
+        num_in_state = [xb_states.count(state) for state in range(1,7)]
         frac_in_state = [n / float(len(xb_states)) for n in num_in_state]
         return frac_in_state
 

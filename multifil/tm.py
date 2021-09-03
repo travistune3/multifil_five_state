@@ -9,6 +9,7 @@ from _operator import indexOf
 
 import numpy as np
 random = np.random
+from scipy.linalg import expm
 
 
 class TmSite:
@@ -371,31 +372,95 @@ class TmSite:
         """Transition from one state to the next, or back, or don't """
         # TODO deal with this later
         # self._concentrations = self.parent_tm.parent_thin.parent_lattice.concentrations
-        rand = np.random.random()
+        
+        
+        # new
+        ##############################################################################################################
+        # get all the rates, ensure rows sum to 0 
+        r12 = self._r12()
+        r14 = self._r14()
+        r11 = -(r12 + r14)
+        
+        r21 = self._r21()
+        r23 = self._r23()
+        r22 = -(r21 + r23)
+        
+        r32 = self._r32()
+        r34 = self._r34()
+        r33 = -(r32 + r34)
+        
+        if self.state == 3 & self.binding_site.state == 1: # can't transition if bound
+            r41, r43, r44 = 0, 0, 0
+        else:
+            r41 = self._r41()
+            r43 = self._r43()
+            r44 = -(r41 + r43)
+        
+        # construct rate matrix Q
+        Q = np.array([[r11,  r12,  0,    r14], 
+                      [r21,  r22,  r23,  0],
+                      [0,    r32,  r33,  r34],
+                      [r41,  0,    r43,  r44]])
+        
+        # dt - timestep 
+        dt = self.timestep_len
+        
+        # Prob matrix - Pij gives prob of transition from state i to j in time dt
+        P = expm(Q * dt)
+        
+        # get row corresponding to current state
+        P_ = P[self.state]
+        
+        # check against random number 
+        check = random.rand()    
+        if check < P_[0]: # pi1
+            trans = str(self.state+1)+str(1)
+            self.state = 0
+        elif check < P_[0] + P_[1]: # pi2
+            trans = str(self.state+1)+str(2)
+            self.state = 1
+        elif check < P_[0] + P_[1] + P_[2]: # pi3
+            trans = str(self.state+1)+str(3)
+            self.state = 2
+        elif check < P_[0] + P_[1] + P_[2] + P_[3]: # pi4
+            trans = str(self.state+1)+str(4)
+            self.state = 3
+            
+        if trans in {"11", "22", "33", "44"}:
+            return None
+        else: 
+            return trans
+        ##############################################################################################################
+        
+        
+        # old
+        ##############################################################################################################
+        # rand = np.random.random()
 
-        f, b = 0, 0     # avoid any chance of an UnboundLocalError
+        # f, b = 0, 0     # avoid any chance of an UnboundLocalError
 
-        # Select which rate calculations are relevant
-        if self.state == 0:
-            f, b = self._prob(self._r12()), self._prob(self._r14())
-        elif self.state == 1:
-            f, b = self._prob(self._r23()), self._prob(self._r21())
-        elif self.state == 2:
-            f, b = self._prob(self._r34()), self._prob(self._r32())
-        elif self.state == 3:
-            if self.binding_site.state == 1:
-                return  # can't transition if bound
-            f, b = self._prob(self._r41()), self._prob(self._r43())
+        # # Select which rate calculations are relevant
+        # if self.state == 0:
+        #     f, b = self._prob(self._r12()), self._prob(self._r14())
+        # elif self.state == 1:
+        #     f, b = self._prob(self._r23()), self._prob(self._r21())
+        # elif self.state == 2:
+        #     f, b = self._prob(self._r34()), self._prob(self._r32())
+        # elif self.state == 3:
+        #     if self.binding_site.state == 1:
+        #         return  # can't transition if bound
+        #     f, b = self._prob(self._r41()), self._prob(self._r43())
 
-        # Calculate probabilities and change state accordingly
-        trans_word = self._forward_backward(f, b, rand)
-        self.state = {"forward": (self.state + 1) % 4,
-                      "backward": (self.state + 3) % 4,
-                      "none": self.state}[trans_word]
+        # # Calculate probabilities and change state accordingly
+        # trans_word = self._forward_backward(f, b, rand)
+        # self.state = {"forward": (self.state + 1) % 4,
+        #               "backward": (self.state + 3) % 4,
+        #               "none": self.state}[trans_word]
 
-        assert self.state in (0, 1, 2, 3), "Tropomyosin state has invalid value"
+        # assert self.state in (0, 1, 2, 3), "Tropomyosin state has invalid value"
 
-        return trans_word
+        # return trans_word
+        ##############################################################################################################
 
     def _process_params(self, tm_params):
         # cooperative multiplier

@@ -10,6 +10,112 @@ from numpy import pi, sqrt, log, radians
 import math as m
 import warnings
 import numpy.random as random
+import numpy as np
+from scipy.linalg import expm
+
+import pdb
+
+
+
+# class Spring:
+#     """A generic spring, from which we make the myosin heads"""
+
+#     def __init__(self, config):
+#         # noinspection PyArgumentList
+#         random.seed()  # Ensure proper seeding
+#         # ## Passed variables
+#         self.r_2 = config['rest_2']
+#         self.r_3 = config['rest_3']
+#         self.r_4 = config['rest_4']
+#         self.k_2 = config['konstant_2']
+#         self.k_3 = config['konstant_3']
+#         self.k_4 = config['konstant_4']
+#         # ## Diffusion governors
+#         # k_T = Boltzmann constant * temperature = (1.381E-23 J/K * 288 K)
+#         k_t = 1.381 * 10 ** -23 * 288 * 10 ** 21  # 10**21 converts J to pN*nM
+#         # Normalize: a factor used to normalize the PDF of the segment values
+#         self.normalize = sqrt(2 * pi * k_t / self.k_2)
+#         self.stand_dev = sqrt(k_t / self.k_2)  # of segment values
+
+#     def to_dict(self):
+#         """Create a JSON compatible representation of the spring """
+#         return self.__dict__.copy()
+
+#     def from_dict(self, sd):
+#         """ Load values from a spring dict. Values read in correspond
+#         to the current output documented in to_dict.
+#         """
+#         self.r_2 = sd['r_2']
+#         self.r_3 = sd['r_3']
+#         self.r_4 = sd['r_4']
+#         self.k_2 = sd['k_2']
+#         self.k_3 = sd['k_3']
+#         self.k_4 = sd['k_4']
+#         self.normalize = sd['normalize']
+#         self.stand_dev = sd['stand_dev']
+
+#     def rest(self, state):
+#         """Return the rest value of the spring in state state
+
+#         Takes:
+#             state: the state of the spring, ['free'|'loose'|'tight']
+#         Returns:
+#             length/angle: rest length/angle of the spring in the given state
+#         """
+#         if state == "DRX" or state == "loose":
+#             return self.r_2
+#         elif state == "tight_1":
+#             return self.r_3
+#         elif state == "tight_2" or state == "free_2":
+#             return self.r_4
+#         else:
+#             warnings.warn("Improper value for spring state")
+
+#     def constant(self, state):
+#         """Return the spring constant of the spring in state state
+
+#         Takes:
+#             state: the state of the spring, ['free'|'loose'|'tight']
+#         Returns:
+#             spring constant: for the spring in the given state
+#         """
+#         if state == "DRX" or state == "loose":
+#             return self.k_2
+#         elif state == "tight_1":
+#             return self.k_3
+#         elif state == "tight_2" or state == "free_2":
+#             return self.k_4
+#         else:
+#             warnings.warn("Improper value for spring state")
+
+#     def energy(self, spring_val, state):
+#         """Given a current length/angle, return stored energy
+
+#         Takes:
+#             spring_val: a spring length or angle
+#             state: a spring state, ['free'|'loose'|'tight']
+#         Returns:
+#             energy: the energy required to achieve the given value
+#         """
+#         # pdb.set_trace()
+#         if state == "DRX" or state == "loose" or state == 'SRX':
+#             return 0.5 * self.k_2 * m.pow((spring_val - self.r_2), 2)
+#         elif state == "tight_1":
+#             return 0.5 * self.k_3 * m.pow((spring_val - self.r_3), 2)
+#         elif state == "tight_2" or state == "free_2":
+#             return 0.5 * self.k_4 * m.pow((spring_val - self.r_4), 2)
+#         else:
+#             warnings.warn("Improper value for spring state")
+
+#     def bop(self):
+#         """Bop for a new value, given an exponential energy dist
+
+#         A longer explanation is in [single xb/Crossbridge.py]   # TODO locate explanation
+#         Takes:
+#             nothing: assumes the spring to be in the unbound state
+#         Returns:
+#             spring_value: the length or angle of the spring after diffusion"""
+#         return random.normal(self.r_2, self.stand_dev)
 
 
 class Spring:
@@ -18,19 +124,18 @@ class Spring:
     def __init__(self, config):
         # noinspection PyArgumentList
         random.seed()  # Ensure proper seeding
+
         # ## Passed variables
-        self.r_2 = config['rest_2']
-        self.r_3 = config['rest_3']
-        self.r_4 = config['rest_4']
-        self.k_2 = config['konstant_2']
-        self.k_3 = config['konstant_3']
-        self.k_4 = config['konstant_4']
+        self.r_w = config['rest_weak']
+        self.r_s = config['rest_strong']
+        self.k_w = config['konstant_weak']
+        self.k_s = config['konstant_strong']
         # ## Diffusion governors
         # k_T = Boltzmann constant * temperature = (1.381E-23 J/K * 288 K)
         k_t = 1.381 * 10 ** -23 * 288 * 10 ** 21  # 10**21 converts J to pN*nM
         # Normalize: a factor used to normalize the PDF of the segment values
-        self.normalize = sqrt(2 * pi * k_t / self.k_2)
-        self.stand_dev = sqrt(k_t / self.k_2)  # of segment values
+        self.normalize = sqrt(2 * pi * k_t / self.k_w)
+        self.stand_dev = sqrt(k_t / self.k_w)  # of segment values
 
     def to_dict(self):
         """Create a JSON compatible representation of the spring """
@@ -40,12 +145,10 @@ class Spring:
         """ Load values from a spring dict. Values read in correspond
         to the current output documented in to_dict.
         """
-        self.r_2 = sd['r_2']
-        self.r_3 = sd['r_3']
-        self.r_3 = sd['r_4']
-        self.k_2 = sd['k_2']
-        self.k_3 = sd['k_3']
-        self.k_3 = sd['k_4']
+        self.r_w = sd['r_w']
+        self.r_s = sd['r_s']
+        self.k_w = sd['k_w']
+        self.k_s = sd['k_s']
         self.normalize = sd['normalize']
         self.stand_dev = sd['stand_dev']
 
@@ -57,12 +160,10 @@ class Spring:
         Returns:
             length/angle: rest length/angle of the spring in the given state
         """
-        if state in ("free_1", "loose"):
-            return self.r_2
-        elif state in ("tight_1"):
-            return self.r_3
-        elif state in ("tight_2, free_2"):
-            return self.r_4
+        if state in ("DRX", "loose", "free_2", "SRX"):
+            return self.r_w
+        elif state in ("tight_1", "tight_2"):
+            return self.r_s
         else:
             warnings.warn("Improper value for spring state")
 
@@ -74,12 +175,10 @@ class Spring:
         Returns:
             spring constant: for the spring in the given state
         """
-        if state in ("free_1", "loose"):
-            return self.k_2
-        elif state in ("tight_1"):
-            return self.k_3
-        elif state in ("tight_2, free_2"):
-            return self.k_4
+        if state in ("DRX", "loose", "free_2", "SRX"):
+            return self.k_w
+        elif state in ("tight_1", "tight_2"):
+            return self.k_s
         else:
             warnings.warn("Improper value for spring state")
 
@@ -92,12 +191,10 @@ class Spring:
         Returns:
             energy: the energy required to achieve the given value
         """
-        if state in ("free_1", "loose"):
-            return 0.5 * self.k_2 * m.pow((spring_val - self.r_2), 2)
-        elif state in ("tight_1"):
-            return 0.5 * self.k_3 * m.pow((spring_val - self.r_3), 2)
-        elif state in ("tight_2, free_2"):
-            return 0.5 * self.k_4 * m.pow((spring_val - self.r_4), 2)
+        if state in ("DRX", "loose", "free_2", "SRX"):
+            return 0.5 * self.k_w * m.pow((spring_val - self.r_w), 2)
+        elif state in ("tight_1", "tight_2"):
+            return 0.5 * self.k_s * m.pow((spring_val - self.r_s), 2)
         else:
             warnings.warn("Improper value for spring state")
 
@@ -109,8 +206,7 @@ class Spring:
             nothing: assumes the spring to be in the unbound state
         Returns:
             spring_value: the length or angle of the spring after diffusion"""
-        return random.normal(self.r_2, self.stand_dev)
-
+        return random.normal(self.r_w, self.stand_dev)
 
 """This python class is no longer used, kept around for equations and line count"""  # class SingleSpringHead:
 #     """A single-spring myosin head, as in days of yore"""
@@ -343,22 +439,18 @@ class Head:
         random.seed()  # Ensure proper seeding
 
         # Remember thine kinetic state
-        self.state = "free"
+        self.state = "SRX"
         # Create the springs which make up the head
         self.c = Spring({  # the converter domain
-            'rest_2': radians(47.16),
-            'rest_3': radians(73.20),
-            'rest_4': radians(73.20),
-            'konstant_2': 40,
-            'konstant_3': 40,
-            'konstant_4': 40})
+            'rest_weak': radians(47.16),
+            'rest_strong': radians(73.20),
+            'konstant_weak': 40,
+            'konstant_strong': 40})
         self.g = Spring({  # the globular domain
-            'rest_2': 19.93,
-            'rest_3': 16.47,
-            'rest_4': 16.47,
-            'konstant_2': 2,
-            'konstant_3': 2,
-            'konstant_4': 2})
+            'rest_weak': 19.93,
+            'rest_strong': 16.47,
+            'konstant_weak': 2,
+            'konstant_strong': 2})
         # Free energy calculation helpers
         g_atp = 13.1  # In units of RT  # 9JUN2020 TODO CHECK RT vs KT - J vs pN*nm
         atp = 5 * 10 ** -3
@@ -369,7 +461,7 @@ class Head:
         
         self.alphaDG_1 = 0.1 * -deltaG  # -6.727
         self.alphaDG_2 = 0.1 * -deltaG  # -6.727
-        self.etaDG_1 = 0.68 * -deltaG    # -16.337
+        self.etaDG_1 = 0.87 * -deltaG    # -16.337
         self.etaDG_2 = -deltaG    # -16.337
         
         
@@ -382,99 +474,157 @@ class Head:
 
     def transition(self, bs, ap):
         """Transition to a new state (or not)
-
+            
         Takes:
             bs: relative Crown to Actin distance (x,y)
             ap: Actin binding permissiveness, from 0 to 1
         Returns:
             boolean: transition that occurred (as string) or None
+            
+            
+            
+            
+                               6
+                              SRX 
+                               ^
+                               |
+                               v
+        Tight_2 => Free_2 <=>  DRX  <=> loose <=> tight_1 <=> tight_2
+                            
+           4         5         1         2         3          4
+        
+        
+        
+        To get probablity of a transition, we first find the rate matrix Q:
+            
+            Q =      [r11,  r12*ap,  0,    0,    r15,  r16], 
+                     [r21,  r22,     r23,  0,    0,    0],
+                     [0,    r32,     r33,  r34,  0,    0],
+                     [0,    0,       r43,  r44,  r45,  0],
+                     [r51,  0,       0,    r54,  r55,  0],
+                     [r61,  0,       0,    0,    0,    r66] 
+                     
+        Eeach element rij has units of 1/ms, and r12 is multiplied by the actin permissiveness. The rows of Q should sum to 0
+                     
+        Then the probability of a transition is:
+            
+            P = expm(Q*dt) 
+        
+        where expm() is the matrix exponential from scipy.linalg (np.exp() only gives element-wise exponential). Rows should sum to 1, and will if rate matrix rows sum to 0.
+        Also, if the norm of Q is too large, it will be impossible to find expm(Q). So we set rates at a max of 10^6 in the definitions of r21 and r32. 
+        
+        The element Pij gives the probability that a myosin head which starts in state i will be in state j after a time dt. 
+                    
         """
-        # ## Transitions rates are checked against a random number
-        check = random.rand()
-        # ## Check for transitions depending on the current state
+        # need pca, since SRX to DRX is Ca dependent
+        pCa = self.parent_face.parent_filament.parent_lattice.pCa 
         
-        if self.state == "free_1":  # Note: It is impossible to go from being unbound to tightly bound(ATP-hydrolyzed)
-            if self._prob(self._r12(bs)) > check:
-                self.state = "loose"
-                return '12'
-            elif (1 - self._prob(self._r15(bs))) < check:
-                self.state = "free_2"
-                return '15'
-            
-            
-            
-            
-            
-        elif self.state == "loose":
-            if self._prob(self._r23(bs)) > check:
-                self.state = "tight_1"
-                return '23'
-            elif (1 - self._prob(self._r21(bs))) < check:
-                self.state = "free"
-                return '21'
-            
-            
-            
-            
-            
-        elif self.state == "tight_1":
-            if self._prob(self._r34(bs)) > check:
-                self.state = "tight_2"
-                return '34'
-            elif (1 - self._prob(self._r32(bs))) < check:
-                self.state = "loose"
-                return '32'
+        r12 = self._r12(bs)*ap
+        r15 = self._r15(bs)
+        r16 = self._r16(bs)
+        r11 = -(r12 + r15 + r16) # rows should sum to zero
         
+        r21 = self._r21(bs)
+        r23 = self._r23(bs)
+        r22 = -(r21 + r23) # rows should sum to zero
         
-                    
-            
-        elif self.state == "tight_2":
-            if self._prob(self._r45(bs)) > check:
-                self.state = "free_2"
-                return '45'
-            elif (1 - self._prob(self._r43(bs))) < check:
-                self.state = "tight_1"
-                return '43'
+        r32 = self._r32(bs)
+        r34 = self._r34(bs)
+        r33 = -(r32 + r34) # rows should sum to zero
         
+        r43 = self._r43(bs) # 43 is ~0 according to https://doi.org/10.1085/jgp.202012604
+        r45 = self._r45(bs)
+        r44 = -(r43 + r45) # rows should sum to zero
         
-                    
-            
-        elif self.state == "free_2":
-            if self._prob(self._r51(bs)) > check:
-                self.state = "free_1"
-                return '51'
-            elif (1 - self._prob(self._r54(bs))) < check:
-                self.state = "tight_2"
-                return '54'
+        r54 = self._r54(bs) # == 0 It is impossible to go *directly* from being unbound to tightly bound(ATP-hydrolyzed)
+        r51 = self._r51(bs)
+        r55 = -(r54 + r51) # rows should sum to zero
         
-        
-                    
+        r61 = self._r61(bs, pCa)
+        r66 = -r61 # rows should sum to zero
 
+        # rate matrix Q
+        Q = np.array([[r11, r12,  0,    0,    r15,  r16], 
+                     [r21,  r22,  r23,  0,    0,    0],
+                     [0,    r32,  r33,  r34,  0,    0],
+                     [0,    0,    r43,  r44,  r45,  0],
+                     [r51,  0,    0,    r54,  r55,  0],
+                     [r61,  0,    0,    0,    0,    r66]]
+                     )
         
+        # time step
+        dt =  self.timestep_len
+        # calculate prob matrix 
+        P = expm(Q*dt)
+        # prob matrix is P = expm(Q*dt) where is expm is matrix exponential, expm is from scipy.linalg
+        # elements are       
+                     #     p11  p12  p13  p14  p15  p16                 [0,0]  [0,1]  [0,2]  [0,3]  [0,4]  [0,5]
+                     #     p21  p22  p23  p24  p25  p26                 [1,0]  [1,1]  [1,2]  [1,3]  [1,4]  [1,5]
+                     #     p31  p32  p33  p34  p35  p36                 [2,0]  [2,1]  [2,2]  [2,3]  [2,4]  [2,5]
+                     #     p41  p42  p43  p44  p45  p46                 [3,0]  [3,1]  [3,2]  [3,3]  [3,4]  [3,5]
+                     #     p51  p52  p53  p54  p55  p56                 [4,0]  [4,1]  [4,2]  [4,3]  [4,4]  [4,5]
+                     #     p61  p62  p63  P64  p56  p66                 [5,0]  [5,1]  [5,2]  [5,3]  [5,4]  [5,5]
         
-        
-        
-        # if self.state == "free_1":  # Note: It is impossible to go from being unbound to tightly bound(ATP-hydrolyzed)
-        #     if self._prob(self._r12(bs)) * ap > check:
-        #         self.state = "loose"
-        #         return '12'
-        # elif self.state == "loose":
-        #     if self._prob(self._r23(bs)) > check:
-        #         self.state = "tight_1"
-        #         return '23'
-        #     elif (1 - self._prob(self._r21(bs))) < check:
-        #         self.state = "free"
-        #         return '21'
-        # elif self.state == "tight":
-        #     if self._prob(self._r31(bs)) > check:
-        #         self.state = "free"
-        #         return '31'
-        #     elif (1 - self._prob(self._r32(bs))) < check:
-        #         self.state = "loose"
-        #         return '32'
-        # Got this far? Than no transition occurred!
-        return None
+        # check rows sum to 1
+        assert(np.allclose(np.sum(P, axis=1), np.array([1.,1.,1.,1.,1.,1.])))
 
+        # get row of P corresponding to current state 
+        lookup_state = {"DRX": 1, "loose": 2, "tight_1": 3, "tight_2": 4, "free_2": 5, "SRX": 6}  
+        P_ = P[lookup_state[self.state]-1]    
+                
+        ####################################################################
+        p12 = P[0,1]
+        p21 = P[1,0]
+        p23 = P[1,2]
+        p32 = P[2,1]
+        p34 = P[2,3]
+        p43 = P[3,2]
+        p54 = P[4,3]
+        p45 = P[3,4]
+        p51 = P[4,0]
+        p15 = P[0,4]
+        p61 = P[5,0]
+        p16 = P[0,5]
+
+        # try:
+        #     with open(r'F:\Users\travi\OneDrive - UW\Daniel_Group\dump\dump.csv','ab') as f:
+        #         np.savetxt(f, [np.asarray([float(bs[0]), float(bs[1]), float(r12), float(r21), float(r23), float(r32), float(r34), float(r43), float(r45), float(r54), float(r51), float(r15), float(r16), float(r61)])], delimiter=',', newline='')
+        #         # np.savetxt(f, [np.asarray([float(bs[0]), float(bs[1]), float(p12), float(p21), float(p23), float(p32), float(p34), float(p43), float(p45), float(p54), float(p51), float(p15), float(p16), float(p61)])], delimiter=',', newline='')
+        #         f.write(b'\n')
+        #     f.close()
+        # except:
+        #     print('dump error')
+        #     pass
+        ####################################################################
+            
+        # get probabilities  against random number 0 to 1
+        check = random.rand()    
+        if check < P_[0]: # pi1
+            trans = str(lookup_state[self.state])+str(1)
+            self.state = "DRX"
+        elif check < P_[0] + P_[1]: # pi2
+            trans = str(lookup_state[self.state])+str(2)
+            self.state = "loose"
+        elif check < P_[0] + P_[1] + P_[2]: # pi3
+            trans = str(lookup_state[self.state])+str(3)
+            self.state = "tight_1"
+        elif check < P_[0] + P_[1] + P_[2] + P_[3]: # pi4
+            trans = str(lookup_state[self.state])+str(4)
+            self.state = "tight_2"
+        elif check < P_[0] + P_[1] + P_[2] + P_[3] + P_[4]: # pi5
+            trans = str(lookup_state[self.state])+str(5)
+            self.state = "free_2"
+        elif check < P_[0] + P_[1] + P_[2] + P_[3] + P_[4] + P_[5]: # pi6
+            trans = str(lookup_state[self.state])+str(6)
+            self.state = "SRX"
+            
+        if trans in {"11", "22", "33", "44", "55", "66"}:
+            return None
+        else: 
+            return trans
+        
+        
+        
     def axial_force(self, tip_location):
         """Find the axial force a Head generates at a given location
 
@@ -531,8 +681,11 @@ class Head:
 
     @property
     def numeric_state(self):
-        """Return the numeric state (0, 1, or 2) of the head"""
-        lookup_state = {"free": 0, "loose": 1, "tight": 2}
+        """Return the numeric state (1, 2, 3, 4, 5, 6) of the head"""
+        lookup_state = {"DRX": 1, "loose": 2, "tight_1": 3, "tight_2": 4, "free_2": 5, "SRX": 6}
+        # pdb.set_trace()
+        if self.state == 'free':
+            print('wrong, not free')
         return lookup_state[self.state]
 
     @property
@@ -588,7 +741,45 @@ class Head:
         """
         return 1 - m.exp(-rate * self.timestep_len)
     
-    def _r12(self, bs):
+    
+    # transition rates 
+    ##########################################################################################################
+    ##########################################################################################################
+    ##########################################################################################################
+    
+    def _r16(self, bs):
+        """ Transition rate to the super-relaxed state (SRX), also called Parked State (PS) in Mijaiolovich,
+            assumed to be constant 200 /s from https://doi.org/10.1085/jgp.202012604
+
+        Takes:
+            bs: relative Crown to Actin distance (x,y)
+        Returns:
+            probability: chance of binding occurring during a timestep
+        """
+ 
+        rate = .2 # 200 /s
+        # ## Return the rate
+        return rate    
+    
+    def _r61(self, bs, pCa):
+        """ From Super-Relaxed (SRX, aka parked state PS) to Disordered Relaxed state (DRX)
+            rate equation from https://doi.org/10.1085/jgp.202012604
+            function takes the form of a hill eq
+        
+        """
+        k_0 = .005 # 5/s
+        k_max = .4 # 400/s
+        b = 5
+        Ca_50 = 1 # uM
+        
+        Ca_c = 10.0 ** (-pCa) *10**(6) # concentration in uM
+        
+        rate = k_0 + ((k_max-k_0)*Ca_c**b)/(Ca_50**b + Ca_c**b)
+
+        return rate
+
+    
+    def _r12(self, bs, dist = None):
         """Bind (or don't) based on the distance from the Head tip to a Actin
 
         Takes:
@@ -598,11 +789,20 @@ class Head:
         """
         # ## Find the distance to the binding site
         tip = self.unbound_tip_loc
-        distance = m.hypot(bs[0] - tip[0], bs[1] - tip[1])
-
+        if dist is None:
+            distance = m.hypot(bs[0] - tip[0], bs[1] - tip[1])
+        else:
+            distance = dist
         # ## The binding rate is dependent on the exp of the dist
         # Rate = \tau * \exp^{-dist^2}
-        rate = 72 * m.exp(-distance ** 2)
+        # rate = 72 * m.exp(-distance ** 2) # rate from three-state model
+
+        # k_0_plus_A * np.exp( -kappa*np.power(x,2)/(2*f_dt*k_bT) ) <== as found in mijailovich https://doi.org/10.1085/jgp.202012604
+        k_0_plus_A = .5226
+        f_dt = 1 
+
+        rate = k_0_plus_A * m.exp( - 1/f_dt * distance**2 )
+
         # ## Return the rate
         return self._br * rate
 
@@ -620,15 +820,17 @@ class Head:
             rate: per ms rate of transition
         """
         # ## The rate depends on the states' free energies
-        unbound_free_energy = self._free_energy(bs, "free_1")
+        unbound_free_energy = self._free_energy(bs, "DRX")
         loose_free_energy = self._free_energy(bs, "loose")
         # ## Rate, as in pg 1209 of Tanner et al, 2007
         # ## With added reduced-detachment factor, increases dwell time
         try:
-            rate = (self._r12(bs) + .05)/ m.exp(
+            rate = (self._r12(bs, dist = 0) + .05)/ m.exp(
                 unbound_free_energy - loose_free_energy)
         except ZeroDivisionError:
             rate = 1
+        if rate > 10**6:
+            rate = 10**6
         return float(rate)
 
     def _r23(self, bs):
@@ -667,10 +869,16 @@ class Head:
             rate = _r23 / m.exp(loose_free_energy - tight_free_energy)
         except ZeroDivisionError:
             rate = 1
+            
+        if rate > 10**6:
+            rate = 10**6
+        
         return float(rate)
 
     def _r34(self, bs):
         """Rate of becoming tightly bound if loosely bound
+
+        k_0_plus_D*np.exp( -(kappa*delta*d*( x/d + 1 + delta/(2*d)) / k_bT ) ) from https://doi.org/10.1085/jgp.202012604
 
         Takes:
             bs: relative Crown to Actin distance (x,y)
@@ -696,7 +904,7 @@ class Head:
         # loose_energy = self.energy(bs, "tight_1")
         # tight_energy = self.energy(bs, "tight_2")
         # ## Power-stroke rate, per ms
-        rate = .1
+        rate = 0
         return float(rate)
 
     def _r45(self, bs):
@@ -709,9 +917,16 @@ class Head:
         """
         # ## Based on the energy in the tight state
         # loose_energy = self.energy(bs, "loose")
-        tight_energy = self.energy(bs, "tight_2")
+        # tight_energy = self.energy(bs, "tight_2")
         # free_2_energy = self.energy(bs, "free_2")
-        rate = m.sqrt(0.01 * tight_energy) + 0.02
+        rate = 1000 # 10^6 1/s from https://doi.org/10.1085/jgp.202012604
+        return float(rate)
+    
+    def _r54(self, bs):
+        """ Per ms rate revere binding, 0 
+        
+        """
+        rate = 0
         return float(rate)
 
     def _r51(self, bs):
@@ -722,8 +937,24 @@ class Head:
         Returns
             rate: per ms rate of detaching from the binding site
         """
-        rate = 1
+        rate = .1 # k_(+h) in https://doi.org/10.1085/jgp.202012604
         return float(rate)
+
+
+
+    def _r15(self, bs):
+        """Per ms rate of unbinding if tightly bound
+
+        Takes:
+            bs: relative Crown to Actin distance (x,y)
+        Returns
+            rate: per ms rate of detaching from the binding site
+        """
+        rate = .01 # k_(-h) in https://doi.org/10.1085/jgp.202012604
+        return float(rate)
+    
+    
+    ##########################################################################################################
 
     def _free_energy(self, tip_location, state):
         """Free energy of the Head
@@ -733,13 +964,23 @@ class Head:
             state: kinetic state of the cross-bridge, ['free'|'loose'|'tight']
         Returns:
             energy: free energy of the head in the given state
+            
+            
+        values come from Pate and Cooke 1989 - "A model of crossbridge action: the effects of ATP, and Pi" page 186
+            
         """
-        if state == "free":
+        if state == "free_2":
             return 0
+        if state == "SRX":
+            return -2.3
+        elif state == "DRX":
+            return -2.3
         elif state == "loose":
-            return -4 + self.energy(tip_location, state)
-        elif state == "tight":
-            return  -20 + self.energy(tip_location, state)
+            return -4.3 + self.energy(tip_location, state)/4
+        elif state == "tight_2":
+            return -4.3 + -16.6 + self.energy(tip_location, state)/4
+        elif state == "tight_1":
+            return -4.3 + -16.6 + -2.12 + self.energy(tip_location, state)/4
 
     @staticmethod
     def _seg_values(tip_location):
@@ -760,8 +1001,8 @@ class Crossbridge(Head):
 
     # kwargs that can be used to edit crossbridge phenotype
     # crossbridge can also accept phenotype profiles
-    VALID_PARAMS = {'mh_c_ks': "pN/rad", 'mh_c_kw': "pN/rad", 'mh_c_rw': "rad", 'mh_c_rs': "rad",
-                    'mh_g_ks': "pN/nm", 'mh_g_kw': "pN/nm", 'mh_g_rw': "nm", 'mh_g_rs': "nm", "mh_br": "au", "mh_dr": "au"}
+    VALID_PARAMS = {'mh_c_k2': "pN/rad", 'mh_c_k3': "pN/rad", 'mh_c_k4': "pN/rad", 'mh_c_r2': "rad", 'mh_c_r3': "rad", 'mh_c_r4': "rad",
+                    'mh_g_k2': "pN/nm", 'mh_g_k3': "pN/nm", 'mh_g_k4': "pN/nm", 'mh_g_r2': "nm", 'mh_g_r3': "nm", 'mh_g_r4': "nm", "mh_br": "au", "mh_dr": "au"}
 
     def __init__(self, index, parent_face, thin_face, **mh_params):
         """Set up the cross-bridge
@@ -883,7 +1124,13 @@ class Crossbridge(Head):
             transition: string of transition ('12', '32', etc.) or None
         """
         # When unbound, try to bind, otherwise just try a transition
-        if self.bound_to is None:
+        # pdb.set_trace()
+        
+        
+                
+        
+        if self.bound_to == None and self.state in {'SRX', 'DRX', "free_2"}:
+            # pdb.set_trace()
             # Find the lattice spacing
             lattice_spacing = self._current_ls
             # Find this cross-bridge's axial location
@@ -899,31 +1146,99 @@ class Crossbridge(Head):
             # Allow the myosin head to take it from here
             trans = super(Crossbridge, self).transition(distance_to_site,
                                                         actin_state)
-            # Process changes to bound state
-            if trans == '12':
-                self.bound_to = actin_site.bind_to(self)
-                if self.bound_to is None:
-                    self.state = 'free'  # failed to bind TODO fix this garbage
-                    # import sys
-                    # msg = "\n---successfully denied---\n"
-                    # sys.stdout.write(msg)
-                    # sys.stdout.flush()
-                # assert(self.bound_to.bound_to is not None)
-            else:
-                assert (trans is None), 'Bound state mismatch'
-        else:
+            
+        else: 
+            try:
             # Get the distance to the actin site
-            distance_to_site = self._dist_to_bound_actin()
+                distance_to_site = self._dist_to_bound_actin()
+            except:
+                pass
+                pdb.set_trace()
             actin_state = self.bound_to.permissiveness
             # Allow the myosin head to take it from here
             trans = super(Crossbridge, self).transition(distance_to_site,
                                                         actin_state)
-            # Process changes to the bound state
-            if trans in {'21', '31'}:
-                self.bound_to = self.bound_to.unbind()
-                assert (self.bound_to is None)
-            else:
-                assert (trans in {'23', '32', None}), 'State mismatch'
+        
+        
+        # binding transitions are from {1,5,6} to {2,3,4}
+        if trans in {'12','13', '14', '52', '53', '54', '62', '63', '64'}:
+            self.bound_to = actin_site.bind_to(self)
+            if self.bound_to is None:
+                self.state = "DRX"  # failed to bind TODO fix this garbage
+                import sys
+                msg = "\n---successfully denied---\n"
+                sys.stdout.write(msg)
+                sys.stdout.flush()
+            # assert(self.bound_to.bound_to is not None)
+        
+        # unbinding transitions are from {2,3,4} to {1,5,6}
+        elif trans in {'21','31', '41', '25', '35', '45', '26', '36', '46'}:
+            self.bound_to = self.bound_to.unbind()
+            assert (self.bound_to is None)
+    
+        # bound to bound transitions are from {3,4,5} to {3,4,5}, 
+        elif trans in {'34','33','35','43','44','45', '53', '54', '55'} :
+            assert(self.bound_to.bound_to is not None)  
+        
+        # unbound to unbound transitions are from {1,5,6} to {1,5,6}, 
+        elif trans in {'34','33','35','43','44','45', '53', '54', '55'} :
+            assert (self.bound_to is None)   
+        
+        return trans
+        
+        
+        
+        
+        
+        # if self.bound_to == None and self.state in {'SRX', 'DRX', "free_2"}:
+        #     # pdb.set_trace()
+        #     # Find the lattice spacing
+        #     lattice_spacing = self._current_ls
+        #     # Find this cross-bridge's axial location
+        #     cr_axial_loc = self.axial_location
+        #     # Find the potential binding site
+        #     actin_site = self.thin_face.nearest(cr_axial_loc + self.unbound_tip_loc[0])  # closest to the myosin head
+        #     actin_axial_loc = actin_site.axial_location
+        #     actin_state = actin_site.permissiveness
+        #     # Find the axial separation
+        #     axial_sep = actin_axial_loc - cr_axial_loc
+        #     # Combine the two distances
+        #     distance_to_site = (axial_sep, lattice_spacing)
+        #     # Allow the myosin head to take it from here
+        #     trans = super(Crossbridge, self).transition(distance_to_site,
+        #                                                 actin_state)
+        #     # Process changes to bound state
+        #     if trans == '12':
+        #         self.bound_to = actin_site.bind_to(self)
+        #         if self.bound_to is None:
+        #             self.state = "DRX"  # failed to bind TODO fix this garbage
+        #             import sys
+        #             msg = "\n---successfully denied---\n"
+        #             sys.stdout.write(msg)
+        #             sys.stdout.flush()
+        #         assert(self.bound_to.bound_to is not None)
+        #     else:
+        #         assert (trans in {'16', '15', '51', '61', None}), ['Bound state mismatch ' + trans]
+                
+        # else:
+            
+        #     # pdb.set_trace()
+        #     # Get the distance to the actin site
+        #     distance_to_site = self._dist_to_bound_actin()
+        #     actin_state = self.bound_to.permissiveness
+        #     # Allow the myosin head to take it from here
+        #     trans = super(Crossbridge, self).transition(distance_to_site,
+        #                                                 actin_state)
+        #     # Process changes to the bound state
+        #     if trans in {'21', '45'}:
+        #         self.bound_to = self.bound_to.unbind()
+        #         assert (self.bound_to is None)
+        #     else:
+        #         assert (trans in {'23', '32', '34', '43', '45', '54', None}), 'State mismatch'
+                
+                
+                
+                
         return trans
 
     def axial_force(self, base_axial_loc=None, tip_axial_loc=None):
@@ -983,7 +1298,7 @@ class Crossbridge(Head):
                    the actin site (x), and the lattice spacing (y)
         """
         # Are you really bound?
-        assert (self.bound_to is not None), "Lies, you're unbound!"
+        assert (self.bound_to is not None), ["Lies, you're unbound!" + self.state]
         # Find the lattice spacing
         lattice_spacing = self._current_ls
         # Find this cross-bridge's axial location if need be
@@ -998,7 +1313,8 @@ class Crossbridge(Head):
     def _process_params(self, mh_params):
         """converter definitions"""
 
-        # converter k_strong_state
+
+# converter k_strong_state
         key = 'mh_c_ks'
         if key in mh_params.keys():
             self.c.k_s = mh_params.pop(key)
@@ -1047,7 +1363,72 @@ class Crossbridge(Head):
         if key in mh_params.keys():
             self.g.r_s = mh_params.pop(key)
         self.constants[key] = self.g.r_s
+        # # converter k_ loose 
+        # key = 'mh_c_k2'
+        # if key in mh_params.keys():
+        #     self.c.k_s = mh_params.pop(key)
+        # self.constants[key] = self.c.k_2
+
+        # # converter k_ tight 1
+        # key = 'mh_c_k3'
+        # if key in mh_params.keys():
+        #     self.c.k_w = mh_params.pop(key)
+        # self.constants[key] = self.c.k_3
         
+        # # converter k_ tight 2
+        # key = 'mh_c_k4'
+        # if key in mh_params.keys():
+        #     self.c.k_w = mh_params.pop(key)
+        # self.constants[key] = self.c.k_4
+
+        # # converter rest_ loose 
+        # key = 'mh_c_r2'
+        # if key in mh_params.keys():
+        #     self.c.r_w = mh_params.pop(key)
+        # self.constants[key] = self.c.r_2
+
+
+
+        """globular definitions"""
+
+        # # globular k_strong_state
+        # key = 'mh_g_k2'
+        # if key in mh_params.keys():
+        #     self.g.k_s = mh_params.pop(key)
+        # self.constants[key] = self.g.k_2
+
+        # # globular k_weak_state
+        # key = 'mh_g_k3'
+        # if key in mh_params.keys():
+        #     self.g.k_w = mh_params.pop(key)
+        # self.constants[key] = self.g.k_3
+
+        # # globular k_weak_state
+        # key = 'mh_g_k4'
+        # if key in mh_params.keys():
+        #     self.g.k_w = mh_params.pop(key)
+        # self.constants[key] = self.g.k_4
+
+        # # globular rest_weak_state
+        # key = 'mh_g_r2'
+        # if key in mh_params.keys():
+        #     self.g.r_w = mh_params.pop(key)
+        # self.constants[key] = self.g.r_2
+
+        # # globular rest_strong_state
+        # key = 'mh_g_r3'
+        # if key in mh_params.keys():
+        #     self.g.r_s = mh_params.pop(key)
+        # self.constants[key] = self.g.r_3
+
+        # # globular rest_strong_state
+        # key = 'mh_g_r4'
+        # if key in mh_params.keys():
+        #     self.g.r_s = mh_params.pop(key)
+        # self.constants[key] = self.g.r_4
+        
+        
+        ##
         # binding rate modifier
         key = 'mh_br'
         if key in mh_params.keys():

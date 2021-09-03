@@ -28,6 +28,8 @@ import numpy as np
 from multifil import hs
 from multifil.utilities import use_aws, json
 
+import pdb
+
 
 # ## Manage a local run
 class manage:
@@ -304,15 +306,24 @@ class data_file:
             'radial_force_y': [],
             'radial_force_z': [],
             'radial_tension': [],
-            'xb_fraction_free': [],
-            'xb_fraction_loose': [],
-            'xb_fraction_tight': [],
+            'xb_fraction_DRX': [], # DRX unattached, 
+            'xb_fraction_loose_1': [], # loosely bound, pre power stroke 
+            'xb_fraction_tight_1': [], # post power stroke, tightly bound 1 
+            'xb_fraction_tight_2': [], # post power stroke, tightly bound 1 
+            'xb_fraction_free_2': [], # unbound, post detached state, pre Hydrolysis  
+            'xb_fraction_SRX': [], # SRX 
             'xb_trans_12': [],
-            'xb_trans_23': [],
-            'xb_trans_31': [],
             'xb_trans_21': [],
+            'xb_trans_23': [],
             'xb_trans_32': [],
-            'xb_trans_13': [],
+            'xb_trans_34': [],
+            'xb_trans_43': [],
+            'xb_trans_45': [],
+            'xb_trans_54': [],
+            'xb_trans_51': [],
+            'xb_trans_15': [],
+            'xb_trans_16': [],
+            'xb_trans_61': [],
             'xb_trans_static': [],
             'actin_permissiveness': [],
             'thick_displace_mean': [],
@@ -351,6 +362,7 @@ class data_file:
         # ## Calculated components
         radial_force = self.sarc.radial_force()
         xb_fracs = self.sarc.get_xb_frac_in_states()
+        # pdb.set_trace()
         xb_trans = sum(sum(self.sarc.last_transitions, []), [])
         tm_fracs = self.sarc.get_tm_frac_in_states()
         tm_rates = self.sarc.tm_rates()
@@ -367,15 +379,24 @@ class data_file:
         ad('radial_force_y', radial_force[0])
         ad('radial_force_z', radial_force[1])
         ad('radial_tension', self.sarc.radial_tension())
-        ad('xb_fraction_free', xb_fracs[0])
-        ad('xb_fraction_loose', xb_fracs[1])
-        ad('xb_fraction_tight', xb_fracs[2])
+        ad('xb_fraction_DRX', xb_fracs[0]) # DRX unattached, 
+        ad('xb_fraction_loose_1', xb_fracs[1]) # loosely bound, pre power stroke 
+        ad('xb_fraction_tight_1', xb_fracs[2]) # post power stroke, tightly bound 1 
+        ad('xb_fraction_tight_2', xb_fracs[3]) # post power stroke, tightly bound 1 
+        ad('xb_fraction_free_2', xb_fracs[4]) # unbound, post detached state, pre Hydrolysis  
+        ad('xb_fraction_SRX', xb_fracs[5]) # SRX 
         ad('xb_trans_12', xb_trans.count('12'))
-        ad('xb_trans_23', xb_trans.count('23'))
-        ad('xb_trans_31', xb_trans.count('31'))
         ad('xb_trans_21', xb_trans.count('21'))
+        ad('xb_trans_23', xb_trans.count('23'))
         ad('xb_trans_32', xb_trans.count('32'))
-        ad('xb_trans_13', xb_trans.count('13'))
+        ad('xb_trans_34', xb_trans.count('34'))
+        ad('xb_trans_43', xb_trans.count('43'))
+        ad('xb_trans_45', xb_trans.count('45'))
+        ad('xb_trans_54', xb_trans.count('54'))
+        ad('xb_trans_51', xb_trans.count('51'))
+        ad('xb_trans_15', xb_trans.count('15'))
+        ad('xb_trans_61', xb_trans.count('61'))
+        ad('xb_trans_16', xb_trans.count('16'))
         ad('xb_trans_static', xb_trans.count(None))
         ad('actin_permissiveness', act_perm)
         ad('thick_displace_mean', np.mean(thick_d))
