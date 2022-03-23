@@ -5,18 +5,75 @@ hs.py - A half-sarcomere model with multiple thick and thin filaments
 
 Created by Dave Williams on 2009-12-31.
 """
-
+import matplotlib.pyplot as plt
 import multiprocessing as mp
 import sys
 import time
 
+import scipy.sparse as sparse
+
+from scipy.sparse.linalg import spsolve 
+
+import numpy.linalg
+from numba import njit
 import numpy as np
 
+import math as m
 from . import af
 from . import mf
 from . import ti
 
 import pdb
+
+def expm_(a):
+    q = 6
+    a2 = a.copy()
+    a_norm = np.max(np.sum(np.abs(a2), axis=1)) #np.linalg.norm ( a2, ord = np.inf )
+    ee = ( int ) ( np.log2 ( a_norm ) ) + 1
+    s = max ( 0, ee + 1 )
+    a2 = a2 / ( 2.0 ** s )
+    x = a2.copy()
+    I = np.broadcast_to(np.eye(a.shape[1]), a.shape)
+    c = .5
+    e = I + c*a2
+    d = I - c*a2
+    p=True
+
+    for k in range ( 2, q + 1 ):
+        c = c * float ( q - k + 1 ) / float ( k * ( 2 * q - k + 1 ) )
+        # x = np.einsum('mij,mjk->mik',a2,x)
+        x = numba_dot(a2,x)
+        e = e + c * x
+        
+        if ( p ):
+            d = d + c * x
+        else:
+            d = d - c * x
+        p = not p
+        
+    e = np.linalg.solve(d,e)
+    
+    for k in range ( 0, s ):
+        # e = np.einsum('mij,mjk->mik',e,e)
+        e = numba_dot(e,e)
+    return e
+
+@njit
+def numba_dot(a,b):
+    x = np.empty(shape=a.shape)
+    for i in range(0,a.shape[0]):
+        x[i,:,:] = np.dot(a[i],b[i])
+    return x
+    
+@njit
+def cart2pol(x, y):
+    '''
+    cartesian to polar coordinates
+    '''
+    rho = np.sqrt(x**2 + y**2)
+    phi = np.arctan2(y, x)
+    return(rho, phi)
+        
 
 class hs:
     """The half-sarcomere and ways to manage it"""
@@ -27,7 +84,7 @@ class hs:
         VALID_PARAMS.update(component.VALID_PARAMS)
 
     def __init__(self, lattice_spacing=None, z_line=None, poisson=None,
-                 pCa=None, timestep_len=1, time_dependence=None, starts=None, **kwargs):
+                 pCa=None, timestep_len=1, time_dependence=None, starts=None, temp=26.15, **kwargs):
         """ Create the data structure that is the half-sarcomere model
 
         Parameters:
@@ -247,6 +304,7 @@ class hs:
         self.lattice_spacing = lattice_spacing
         self.z_line = z_line
         self.pCa = pCa
+        self.ca = 10**(-pCa)
         # Create the thin filaments, unlinked but oriented on creation.
         thin_orientations = ([4, 0, 2], [3, 5, 1], [4, 0, 2], [3, 5, 1],
                              [3, 5, 1], [4, 0, 2], [3, 5, 1], [4, 0, 2])
@@ -459,6 +517,37 @@ class hs:
             self.constants['mh'].update(myosin.mh_constants)
         for actin in self.thin:
             self.constants['tm'].update(actin.tm_constants)
+            
+        self.temp = temp
+            
+        # K_matrix is the stiffnesst matrix of all LINEAR ELEMENTS ONLY, does not include titin
+        self.K_matrix = self.hs_passive_stiffness_matrix()
+        self.V = self.spring_boundary_conditions()
+        
+        # initaizle the half sarc geometry 
+        # bassically self.timestep, but with dt = 1000 ms
+        # Use Newton method to solve for the new spring configuration
+        # do this before any binding to deal with titin's configuration
+        self.Newton()
+        for _ in range(10):
+            # set which tm sites are subject to cooperative effects
+            self.set_subject_to_cooperativity()
+            # assign each xb its nearest neighbor binding site
+            self.set_xb_nearest_binding_site()  
+            # Update thin filament tm states
+            self.thin_transitions(dt = 100)
+            # update thick filament xb states and binding status
+            self.thick_transitions(dt = 100)
+            # Use Newton method to solve for the new spring configuration 
+            self.Newton()
+        
+        
+        
+        
+        
+        
+        
+        
 
     def to_dict(self):
         """Create a JSON compatible representation of the thick filament
@@ -606,7 +695,308 @@ class hs:
                          " finished timestep %i of %i, %ih%im%is left"
                          % (i + 1, time_steps, toc / 60 / 60, toc / 60 % 60, toc % 60))
         sys.stdout.flush()
+    
+    def Force_on_each_node(self):
+        '''
+        
+        Force on each node is:
+            
+            K*x + Fxb + V
+            
+            K = hs_passive_stiffness_matrix
+            F = force from xbs
+            F_titin
+            
+            V = boundary conditions 
 
+        Returns
+        -------
+        None.
+
+        '''
+        
+        K = self.K_matrix
+        V = self.V
+        
+        for th in self.thick:
+            V[60*th.index + 59] += 6 * th.thick_faces[0].titin_fil.axial_force() 
+        for th in self.thin:
+            V[240 + 90*th.index + 89] += th.k*self.z_line
+            
+        
+        axial_locations = np.concatenate((np.concatenate([i.axial for i in self.thick]), np.concatenate([i.axial for i in self.thin])))
+        
+        
+        xbs = [xb for th in self.thick for cr in th.crowns for xb in cr.crossbridges if xb.bound_to is not None ]
+        
+        x = []
+        y = []
+        data = []
+        for xb in xbs:
+            
+            # # indices corresponding to this crossbridge 
+            mf_index = xb.address[1]*60+xb.address[3] 
+            af_index = xb.bound_to.address[1]*90 + xb.bound_to.address[2] + 240 # 90 binding sites per thin filament, + 60*4=240 xbs
+            
+            
+            # # axial value of the xb base and binding site, w.r.t the m_line (m_line == 0)
+            xb_x = th.axial[xb.address[3]]
+            bs_x = self.thin[xb.bound_to.address[1]].axial[xb.bound_to.address[2]]
+            
+            Fxb = xb.axial_force(bs_x - xb_x, self.lattice_spacing)
+            
+            x.extend([mf_index,af_index])
+            # y.extend([mf_index, af_index])
+            data.extend([Fxb,-Fxb])
+        
+        y1 = [0 for i in x]
+        
+        Force =  (K @ axial_locations).reshape((960,1)) + sparse.csr_matrix((data,(x,y1)), shape=(960,1)) + V.reshape(960,1)
+        
+        return Force
+        
+    def spring_boundary_conditions(self):
+        
+        '''
+        
+        actin nodes have different spring offsets, we write k * (rest_i - rest_j) here for all thick and thin filaments. 
+        
+        This does not include contributions at the last nodes connecting to z-disk, since it depends on z, 
+        and we want to update at each step accordingly
+        
+        F = K_matrix * x + V + F_titin + F_xbs_bs + F_z_actin
+        
+        
+        
+        
+        '''
+        
+        v_thick_0 = - self.thick[0].k * np.diff(np.concatenate((self.thick[0].rests,[0])))
+        v_thick_1 = - self.thick[1].k * np.diff(np.concatenate((self.thick[1].rests,[0])))
+        v_thick_2 = - self.thick[2].k * np.diff(np.concatenate((self.thick[2].rests,[0])))
+        v_thick_3 = - self.thick[3].k * np.diff(np.concatenate((self.thick[3].rests,[0])))
+        
+        v_thin_0 = - self.thin[0].k * np.diff(np.concatenate(([0],self.thin[0].rests)))
+        v_thin_1 = - self.thin[1].k * np.diff(np.concatenate(([0],self.thin[1].rests)))
+        v_thin_2 = - self.thin[2].k * np.diff(np.concatenate(([0],self.thin[2].rests)))
+        v_thin_3 = - self.thin[3].k * np.diff(np.concatenate(([0],self.thin[3].rests)))
+        v_thin_4 = - self.thin[4].k * np.diff(np.concatenate(([0],self.thin[4].rests)))
+        v_thin_5 = - self.thin[5].k * np.diff(np.concatenate(([0],self.thin[5].rests)))
+        v_thin_6 = - self.thin[6].k * np.diff(np.concatenate(([0],self.thin[6].rests)))
+        v_thin_7 = - self.thin[7].k * np.diff(np.concatenate(([0],self.thin[7].rests)))
+
+        V = np.concatenate((
+            v_thick_0,
+            v_thick_1,
+            v_thick_2,
+            v_thick_3,  
+            v_thin_0,
+            v_thin_1,
+            v_thin_2,
+            v_thin_3,
+            v_thin_4,
+            v_thin_5,
+            v_thin_6,
+            v_thin_7
+            ))
+        
+        return V
+    
+    def hs_passive_stiffness_matrix(self):
+        '''
+        
+        gets the spring stiffness matrix K for passive conditions (no bound crossbridges), not counting titin 
+        
+        for a system of linear springs:
+        Force = K * x 
+        K is the stiffness matrix
+        
+        
+        Form is:
+            Myosin:
+                A[0,0] = -2k # myosin is connected to m-line
+                A[i,i] = -2k
+                A[i,i-1] = A[i-1,i] = +k # aka the two adjacent diagonals, super- and sub-diagonalals
+                A[end,end] = -k # see note below
+                
+            Actin:
+                A[0,0] = -k # actin unconnected to m-line
+                A[i,i] = -2k 
+                A[i,i-1] = A[i-1,i] = +k # aka the two adjacent off diagonals, super- and sub-diagonalals
+                A[end,end] = -2k # actin is connected to z disk
+                
+                
+                
+                *********
+      !!          A[end,end] = -k #
+      !!          This should acually be -k + titin_stiffness, but here we set the stiffness matrix for myosin as if it's 
+      !!          unconected to z-line, and account for titin elsewhere, when we set the Jacobian, since its stiffness is dependent 
+      !!          on the z_line, so it needs to be updated at each time step 
+                
+                *********
+
+        Then concatenate into big 960*960 matrix, that is >99 % sparse, so we can use sparse matrix methods, 
+        ie scipy.sparse
+        
+        
+        This matrix is a constant and is used in finding the Jacobian, we just need to add the stiffness due to any bound xbs, and titin, 
+        which both change at each timestep, 
+        
+        
+                
+        ''' 
+        
+        xb_num = len(self.thick[0].axial)
+        thick_k = self.thick[0].k
+        
+        bs_num = len(self.thin[0].axial)
+        thin_k = self.thin[0].k
+        
+        kth0 = np.eye(xb_num, k=0)*-2*thick_k + \
+            np.eye(xb_num, k=1)*thick_k + \
+                np.eye(xb_num, k=-1)*thick_k; kth0[59,59] = -thick_k
+        kth1 = np.eye(xb_num, k=0)*-2*thick_k + \
+            np.eye(xb_num, k=1)*thick_k + \
+                np.eye(xb_num, k=-1)*thick_k; kth1[59,59] = -thick_k
+        kth2 = np.eye(xb_num, k=0)*-2*thick_k + \
+            np.eye(xb_num, k=1)*thick_k + \
+                np.eye(xb_num, k=-1)*thick_k; kth2[59,59] = -thick_k
+        kth3 = np.eye(xb_num, k=0)*-2*thick_k + \
+            np.eye(xb_num, k=1)*thick_k + \
+                np.eye(xb_num, k=-1)*thick_k; kth3[59,59] = -thick_k
+        
+        Ka0 = np.eye(bs_num, k=0)*-2*thin_k + \
+            np.eye(bs_num, k=1)*thin_k + \
+                np.eye(bs_num, k=-1)*thin_k; Ka0[0,0] = -thin_k
+                
+        Ka1 = np.eye(bs_num, k=0)*-2*thin_k + \
+            np.eye(bs_num, k=1)*thin_k + \
+                np.eye(bs_num, k=-1)*thin_k; Ka1[0,0] = -thin_k
+                
+        Ka2 = np.eye(bs_num, k=0)*-2*thin_k + \
+            np.eye(bs_num, k=1)*thin_k + \
+                np.eye(bs_num, k=-1)*thin_k; Ka2[0,0] = -thin_k
+                
+        Ka3 = np.eye(bs_num, k=0)*-2*thin_k + \
+            np.eye(bs_num, k=1)*thin_k + \
+                np.eye(bs_num, k=-1)*thin_k; Ka3[0,0] = -thin_k
+                
+        Ka4 = np.eye(bs_num, k=0)*-2*thin_k + \
+            np.eye(bs_num, k=1)*thin_k + \
+                np.eye(bs_num, k=-1)*thin_k; Ka4[0,0] = -thin_k
+                
+        Ka5 = np.eye(bs_num, k=0)*-2*thin_k + \
+            np.eye(bs_num, k=1)*thin_k + \
+                np.eye(bs_num, k=-1)*thin_k; Ka5[0,0] = -thin_k
+                
+        Ka6 = np.eye(bs_num, k=0)*-2*thin_k + \
+            np.eye(bs_num, k=1)*thin_k + \
+                np.eye(bs_num, k=-1)*thin_k; Ka6[0,0] = -thin_k
+                
+        Ka7 = np.eye(bs_num, k=0)*-2*thin_k + \
+            np.eye(bs_num, k=1)*thin_k + \
+                np.eye(bs_num, k=-1)*thin_k; Ka7[0,0] = -thin_k
+             
+        thick_fill = np.zeros((xb_num,xb_num))
+        thin_fill = np.zeros((bs_num,bs_num))
+        upper_fill = np.zeros((xb_num,bs_num))
+        lower_fill = np.zeros((bs_num,xb_num))
+        
+        hs_node_matrix = np.bmat([
+            [kth0,        thick_fill,  thick_fill,  thick_fill,  upper_fill, upper_fill,  upper_fill, upper_fill, upper_fill, upper_fill, upper_fill, upper_fill],
+            [thick_fill,  kth1,        thick_fill,  thick_fill,  upper_fill, upper_fill,  upper_fill, upper_fill, upper_fill, upper_fill, upper_fill, upper_fill],
+            [thick_fill,  thick_fill,  kth2,        thick_fill,  upper_fill, upper_fill,  upper_fill, upper_fill, upper_fill, upper_fill, upper_fill, upper_fill],
+            [thick_fill,  thick_fill,  thick_fill,  kth3,        upper_fill, upper_fill,  upper_fill, upper_fill, upper_fill, upper_fill, upper_fill, upper_fill],
+            [lower_fill,  lower_fill,  lower_fill,  lower_fill,  Ka0,        thin_fill,   thin_fill,  thin_fill,  thin_fill,  thin_fill,  thin_fill,  thin_fill],
+            [lower_fill,  lower_fill,  lower_fill,  lower_fill,  thin_fill,  Ka1,         thin_fill,  thin_fill,  thin_fill,  thin_fill,  thin_fill,  thin_fill],
+            [lower_fill,  lower_fill,  lower_fill,  lower_fill,  thin_fill,  thin_fill,   Ka2,        thin_fill,  thin_fill,  thin_fill,  thin_fill,  thin_fill],
+            [lower_fill,  lower_fill,  lower_fill,  lower_fill,  thin_fill,  thin_fill,   thin_fill,  Ka3,        thin_fill,  thin_fill,  thin_fill,  thin_fill],
+            [lower_fill,  lower_fill,  lower_fill,  lower_fill,  thin_fill,  thin_fill,   thin_fill,  thin_fill,  Ka4,        thin_fill,  thin_fill,  thin_fill],
+            [lower_fill,  lower_fill,  lower_fill,  lower_fill,  thin_fill,  thin_fill,   thin_fill,  thin_fill,  thin_fill,  Ka5,        thin_fill,  thin_fill],
+            [lower_fill,  lower_fill,  lower_fill,  lower_fill,  thin_fill,  thin_fill,   thin_fill,  thin_fill,  thin_fill,  thin_fill,  Ka6,        thin_fill],
+            [lower_fill,  lower_fill,  lower_fill,  lower_fill,  thin_fill,  thin_fill,   thin_fill,  thin_fill,  thin_fill,  thin_fill,  thin_fill,  Ka7]
+            ])
+        
+        return sparse.csr_matrix(hs_node_matrix)
+    
+    def Jacobian_Matrix(self):
+        '''
+        
+        Returns the Jacobian matrix for the current configuration of the Half sarcomere
+        J is stored as a sparse scipy matrix
+        
+        Each entry Jij is the partial derivative of i with respect to j
+        
+        So in the half sarcomere model, it's the derivative of Force on node i with resepect to the axial position of node j
+        
+        The force on node i can only be influenced directly by the nodes adjacent to it, or when a crossbridge is bound between node i and j,
+        so J ends up being 99% sparse
+        
+        K is the (sparse) stiffness matrix of the linear springs in the thick and thin filaments, so we just need to add the contributions
+        of bound xbs and titin.
+        
+        J is a square matrix that's of length total_crown_num + total_bs_num = 240 + 720 = 960      
+        
+        '''
+        
+        # passive stiffness of each linear spring making up the filaments, not counting titin
+        
+        K = self.K_matrix
+
+        i = []
+        j = []
+        Jac = []
+        for thick in self.thick: 
+            # each thick filament has 6 titin filaments
+            # 60*thick_index + 59 is the last node for that thick filament, which is the one attached to the z-disk
+            i.extend([60*thick.index + 59])
+            j.extend([60*thick.index + 59])
+            # multiply by 6 because each thick filament is attached to the z disk by 6 titin filaments, they have identical stiffness
+            Jac.extend([- 6 * thick.thick_faces[0].titin_fil.stiffness() ])
+            for cr in thick.crowns:
+                for xb in cr.crossbridges:
+                    if xb.state in {'loose', 'tight_1', 'tight_2'}:
+                        
+                        # get i,j for this bound xb-bs pair to put in the 960*960 array
+                        
+                        # there are two indexes we need here, the index of the xb and bs w.r.t the filament they are on
+                        # and their index in the final 960*960 matrix
+                        
+                        # for their index w.r.t thier parent filament see xb.address and bs.address
+                        # we use those to get the index of the parent filament and the xb/bs number witin that particular parent filament
+                        # then  the index wrt the 960*960 array, corresponding to this crossbridge xb:
+                            # 60 * thick_fil_index + xb_index
+                        mf_index = xb.address[1]*60+xb.address[3] 
+                       
+                        # and the index of the bound actin bindings site bs:
+                            # 90 * thin_fil_index + xb_index + 240 (240 accounts for the 4*60 xbs)
+                        af_index = xb.bound_to.address[1]*90 + xb.bound_to.address[2] + 240
+
+                        # # axial value of the xb base and binding site, w.r.t the m_line (m_line == 0)
+                        # get the axial values the bs-xb pair
+                        xb_x = thick.axial[xb.address[3]]
+                        bs_x = self.thin[xb.bound_to.address[1]].axial[xb.bound_to.address[2]]
+                        
+                        # calculate the partial derivative of the force on the xb with repsect to the binding site axial 
+                        Fxb = xb.D_force_D_x((bs_x, xb_x, self.lattice_spacing))
+                        
+                        # each bound xb-bs pair contributes 4 values to the Jacobian, 
+                        # at (i,i) for d_Fxb/d_xb_x
+                        # at (j,i) for d_Fbs/d_xb_x
+                        # at (i,j) for d_Fxb/d_bs_x
+                        # at (j,j) for d_Fbs/d_bs_x
+                        i.extend([mf_index,af_index,mf_index,af_index])
+                        j.extend([mf_index,mf_index,af_index,af_index])
+                        # the value to add is just different by a sign
+                        Jac.extend([Fxb,-Fxb,-Fxb,Fxb])
+                        
+        # i,j are now the list of indicies correspoiding to values in J, 
+        # which are the contributions to the Jacobian from titin and xbs                       
+        # now add to K for full Jacobian
+        Jacobian = K + sparse.csr_matrix((Jac,(i,j)), shape=(960,960))
+        
+        return Jacobian
+        
     def timestep(self, current=None):
         """Move the model one step forward in time, allowing the
         myosin heads a chance to bind and then balancing forces
@@ -616,15 +1006,833 @@ class hs:
             self.current_timestep = current
         else:
             self.current_timestep += 1
+        
+        # set which tm sites are subject to cooperative effects
+        self.set_subject_to_cooperativity()
+        
+        # assign each xb its nearest neighbor binding site
+        self.set_xb_nearest_binding_site()  
+                
+        # Update thin filament tm states
+        self.thin_transitions()
+        # update thick filament xb states and binding status
+        self.thick_transitions()
+       
+        # Use Newton method to solve for the new spring configuration 
+        self.Newton()
+        
+        return
+        
+    
+    def thin_transitions(self, dt=None):
+        '''
 
-        # Update bound states
-        self.last_transitions = [thick.transition() for thick in self.thick]
-        # self.update_concentrations()
-        self.tm_transitions = [thin.transition() for thin in self.thin]  # TODO: work into storage
+        Cycle through the tm sites and get the rate matrix Q for each site, then cacluate P = matrix_exp(Q * dt),
+        where dt = timestep_len. 
+        
+        P is then the matrix with elements Pij, which gives the probability a state which begins in state i will end up
+        in state j after time dt. 
+        We then get a random number and compare with row i of P, where i is corresponds to the current state 
+        of the site. 
+        
+        Because Q only depends on Ca concentration (same for all Tm sites), cooperative status [T/F], and myosin 
+        binding status [T/F], we only need to calculate Q and P 2*2=4 times per timestep, per species of Tropomyosin 
+        present in the half sarcomere. We then store those matrix and recall them. That way we don't calucate 
+        once per tm site (720) times per timestep. 
+        
 
-        # Settle forces
-        self.settle()
+        '''
+        
+        if dt is None:
+            dt = self.timestep_len
+        
+        # get a list of every actin binding site
+        bs_s = [bs for th in self.thin for bs in th.binding_sites ]
+        
+        # get a list of the current state of each tm site
+        old_states = [bs.tm_site.state for th in self.thin for bs in th.binding_sites ]
+        
+        # get all the constants we need to make the rate matrix Q for every binding site
+        tm_site_constants = np.array([[
+            bs.tm_site._K1,
+            bs.tm_site._K2,
+            bs.tm_site._K3,
+            bs.tm_site._K4 if bs.tm_site._K4 is not None else 0,
+            
+            bs.tm_site._k_12,
+            bs.tm_site._k_23,
+            bs.tm_site._k_34,
+            bs.tm_site._k_41,
+            
+            bs.tm_site._coop,
+            1 if bs.tm_site.subject_to_cooperativity else 0,
+            
+            0 if bs.tm_site.state==3 and bs.bound_to is not None else 1]
+            for bs in bs_s])
+        
+        # we also need caclium concentration in molar
+        ca = self.ca 
+        
+        # get the [720 x 4 x 4] array of Q matricies 
+        Q = self.binding_site_rate_matix(tm_site_constants, ca)
+        
+        # each row in each Q should sum to 0
+        # don't manipulate Q outsied of self.binding_site_rate_matrix()
+        assert(np.max(np.abs(np.sum(Q[:,:,:], axis = 2)))<10**-11)
 
+        # average Q and store for output to data file at each timestep, see self.tm_rates
+        self.tm_rates_ = np.mean(Q,axis=0)
+        
+        # find the unique Qs and thier index, there should be at most 4 unqiue Qs per species of tm site
+        # we only find expm(Q) for those to avoid unecessary caclulations, 
+        Q_reduced, Q_ids = np.unique(Q, axis=0, return_inverse=True)
+        
+        # each row in each Q should sum to 0
+        # don't manipulate Q outsied of binding_site_rate_matix function
+        assert(np.max(np.abs(np.sum(Q_reduced[:,:,:], axis = 2)))<10**-11)
+        
+        # get the full [720 x 4 x 4] array of P matricies from the reduced list
+        P_reduced = expm_(Q_reduced * dt)
+        P = P_reduced[Q_ids]
+        
+        # get a list of random numbers from uniform dist
+        p = np.random.rand(720,1)
+        
+        # for each of the [4 x 4] probability matrices, we want the row which corresponds to that bs's current state, 
+        # for example since P is a matrix with values Pij, we want row i since we want transition probabilities from state i to j, where i is the current state
+        Prob = np.empty((720,4))
+        for i in range(0,720):
+            # bs numeric_state goes from 0-3, (rather than 1-4) so we DONT need -1 here, 
+            Prob[i,:] = P[i,old_states[i],:]
+        
+        # cumsum each item in Prob for next step
+        Prob_array = np.cumsum(Prob, axis=1)
+        
+        # for each bs, the new state is the first entry in each probability vector Prob_array[i] smaller than p[i]
+        new_states = np.argmax(p < Prob_array, axis=1) 
+        
+        # deal out the new states to each tm_site
+        for i, bs_ in enumerate(bs_s):
+            bs_.tm_site.state = new_states[i]
+        
+        return                    
+                
+    @staticmethod
+    @njit
+    def binding_site_rate_matix(tm_site_constants, ca):
+        
+        
+        '''
+        
+        Constructs the [720 x 4 x 4] array of rate matrices for each of the tm sites. 
+        
+        Each [4 x 4] slice is the rate matrix of one tm_site iwth elememnts Qij meaning the rate of transitioning from state i
+        to state j
+        
+        ca is calcium concentation (10**pca)
+        
+        tm_site_constants[:,0:4] are the equilirim rate constants
+        
+        tm_site_constants[:,4:8] are the forward rate constants
+        
+        tm_site_constants[:,8] is the magniutde of cooperativity 
+        
+        tm_site_constants[:,9] is 0/1 for True/False of whether a bs is subject to cooperateive effets
+        
+        tm_site_constants[:,10] is whether the site is bound to an xb and therefore cant transition away from state 3
+        
+        reverse rates are defined as forward_rates/Equilibrium rates
+        
+        '''
+        
+        
+        
+        # get the equilibrium reaction rates 
+        _K1 = tm_site_constants[:,0]
+        _K2 = tm_site_constants[:,1]
+        _K3 = tm_site_constants[:,2]
+        _K4 = tm_site_constants[:,3]
+        
+        # coop is magnitude of cooperative effect
+        coop = tm_site_constants[:,8]
+        # wheterh the tm site is subject to cooperative effeects: 1 for true, 0 for false
+        sub_to_coop = tm_site_constants[:,9]
+        
+        # where (coop * sub_to_coop) = 0 => set coop to 1, ie no cooperative effect (coop*rate = 1*rate = rate)
+        # else coop is unchanged, the magnitude of the cooperative effect
+        coop[np.where(coop * sub_to_coop==0)] = 1
+        
+        # forward rate constants
+        _k_12 = tm_site_constants[:,4] 
+        _k_23 = tm_site_constants[:,5] 
+        _k_34 = tm_site_constants[:,6] 
+        _k_41 = tm_site_constants[:,7]
+        
+        # we don't allow 43 or 41 transitions if the binding site is in state 3 AND bound to an xb
+        # so we multiply k41 and k43 by s, which is 0 if bs is bound and in state 3, otherwise 1
+        s = tm_site_constants[:,10]
+        
+        ########################################################################################################################
+        # 
+        #       Tropomyosin rate defintions below
+        #
+        #
+        # 
+        ########################################################################################################################
+        
+        # forward
+        k_12 = _k_12 * ca * coop
+        k_23 = _k_23 * coop
+        k_34 = _k_34 * coop
+        k_41 = _k_41 * s 
+        
+        # backward
+        k_21 = _k_12 / _K1
+        k_32 = _k_23 / _K2
+        k_43 = _k_34 / _K3 * s
+        k_14 = 0
+        
+        # diagonal rates should be set to that rows in Q sum to 0
+        k_11 = - (k_12 + k_14)
+        k_22 = - (k_23 + k_21)
+        k_33 = - (k_32 + k_34)
+        k_44 = - (k_41 + k_43)
+        
+        ########################################################################################################################
+        # 
+        #       Tropomyosin rate defintions above
+        #
+        #
+        # 
+        ########################################################################################################################
+        
+        # construct Q 
+        Q = np.zeros((720,4,4))
+        
+        Q[:,0,0] = k_11
+        Q[:,0,1] = k_12 
+        Q[:,0,3] = k_14 
+        
+        Q[:,1,0] = k_21
+        Q[:,1,1] = k_22
+        Q[:,1,2] = k_23
+        
+        Q[:,2,1] = k_32
+        Q[:,2,2] = k_33
+        Q[:,2,3] = k_34
+        
+        Q[:,3,2] = k_43
+        Q[:,3,3] = k_44
+        Q[:,3,0] = k_41
+        
+        return Q
+        
+       
+    def set_subject_to_cooperativity(self):
+        '''
+        
+        decide which tm sites are subject to cooperativity. 
+
+        The span (state 2 coercion of adjacent sites to state 1 from 
+        state 0) is based on the current tension at the binding site 
+        co-located under this tropomyosin site. 
+        Notes
+        -----
+        The functional form of the span is determined by:
+            
+            $$span = 0.5 * base (1 + tanh(steep*(force50 + f)))$$
+            
+        Where $span$ is the actual span, $base$ is the resting (no force) 
+        span distance, $steep$ is how steep the decrease in span is, 
+        $force50$ is the force at which the span has decreased by half, and 
+        f is the current effective axial force of the thin filament, an 
+        estimate of the tension along the thin filament. 
+        These properties are stored at the tropomyosin chain level as they 
+        are material properties of the entire chain.
+        
+        
+        0.5 * base * (1 + m.tanh(steep * (f50 + f)))
+        
+        ''' 
+
+        for thin in self.thin:
+            for tm in thin.tm:
+                
+                
+                base = tm.span_base
+                F_50 = tm.span_force50
+                steepness = tm.span_steep
+                
+                # F is the tension on each node due to crossbridges, summed up to the m line: see thin.tension_at_site in af.py
+                F = (np.triu(np.ones(thin.number_of_nodes)) @ thin._axial_thin_filament_forces())[tm.sites[0].binding_site.address[2]::2]
+                
+                # calculate span 
+                span = .5 * base * (1 + np.tanh(steepness * (F_50 + F ) )) 
+                
+                # truth matrix of which nodes are within a node's span
+                d = (np.abs(tm.axial_locations[:,np.newaxis] - tm.axial_locations) - span[:,None])<0
+                
+                # Truth vector of which nodes are in state 2
+                state = [True if s.state==2 else False for s in tm.sites]
+                
+                # truth matrix * truth vector, then np.any to see if at least one node is within span and in state 2
+                coop = np.any(d*state, axis=1)
+
+                # deal out 'True' or 'False' for coop to each tm node
+                for index, site in enumerate(tm.sites):
+                    site.subject_to_cooperativity = coop[index]
+                    
+        return   
+    
+    
+      
+    @staticmethod
+    @njit
+    def xb_rate_matrix(bs, V, rate_factors, ap, ca_c, temp):
+        
+        '''
+        
+        Finds the (n x n x L) array where each n*n slice corresponds to one xbs transtions rate matrix, 
+        with elements rij, which correspond to transitons rates from state i to state j
+        
+        each 6x6 slice looks like the following:
+        
+            Q = np.array([
+                      [r11,  r12,   0,    0,    r15,  r16], 
+                      [r21,  r22,   r23,  0,    0,    0],
+                      [0,    r32,   r33,  r34,  0,    0],
+                      [0,    0,     r43,  r44,  r45,  0],
+                      [r51,  0,     0,    r54,  r55,  0],
+                      [r61,  0,     0,    0,    0,    r66]
+                      ])
+        
+        
+        L is the nuimber of crossbridges, so we end up with a (6 x 6 x 720) array 
+        
+        
+        Arguments are:
+            bs: (x,y) distance between xb and bs
+            V: spring constants of each of the two spings, for each xb, in each state (2*2*2) -> (8 x 720) array
+            rate_factors: multiply certain xbs with rate factors, see hs_params in hs.py and mh_params in mh.py:
+                rate_factors[:,0] -> rsrx (r16)
+                rate_factors[:,1] -> r12
+                rate_factors[:,2] -> r45 
+            ap: binding site availability
+            ca_c: calcium concentration in uM
+            temp: temp in degree c
+        
+        
+        '''
+    
+        # get boltzman constant in units of pn*nm
+        # self.temp is in units of c, we need to convert to k
+        k_t =  1.3810 * 10. ** -23. * (temp + 273.15) * 10. ** 21.  # 10**21
+        
+        # cartesian to polar transformation
+        (r,theta) = cart2pol(bs[:,0], bs[:,1])
+        
+        # E1, WEAK potential energy when BOUND at bs
+        E_weak = (1/2 * V[:,0] * (r -  V[:,1])**2  +  1/2 * V[:,2] * (theta - V[:,3])**2) / k_t
+        # E2, STRONG potential Energy when BOUND at bs
+        E_strong = (1/2 * V[:,4] * (r -  V[:,5])**2  +  1/2 * V[:,6] * (theta - V[:,7])**2) / k_t
+        
+        # FREE energy U = scalar + potential energy, 
+        # scalar values come from Pate and Cooke 1989 - "A model of crossbridge action: the effects of ATP, and Pi" page 186
+        U_free = 0 
+        U_SRX = 0       
+        U_DRX = -2.3
+        U_loose = -4.3 + E_weak
+        U_tight_1 = -4.3 + -14.3 + E_strong
+        U_tight_2 = -4.3 + -14.3 + -2.12 + E_strong
+        
+        ############################################################################################################################################
+        #
+        #
+        #
+        #   Myosin head
+        #   Rate function definitions below
+        # 
+        #
+        #
+        ############################################################################################################################################
+        
+        # for constant rates
+        ones = np.ones(len(bs))
+        # upper bound, exp(Q) will fail if norm(Q) is to large, also gets rid of inf from 1/exp in backwards rate defs
+        upper = 10000
+        
+        # DRX (1) <-> free (2)
+        tau = .72
+        r12 = rate_factors[:,1] * tau * np.exp( -E_weak ); r12[np.isnan(r12)] = 0
+        r21 = (r12 + .005) / np.exp(U_DRX - U_loose); r21[r21>upper] = upper; r21[np.isnan(r21)] = upper
+        
+        # free (2) <-> tight_1 (3)
+        r23 = (0.6 *  # reduce overall rate
+                (1 +  # shift rate up to avoid negative rate
+                  np.tanh(5 +  # move center of transition to right
+                        0.4 * (E_weak - E_strong)))) + .05; r23[np.isnan(r23)] = 0
+        r32 = r23 / np.exp(U_loose - U_tight_1); r32[r32>upper] = upper
+        
+        # tight_1 (3) <-> tight_2 (4)
+        A = 1
+        r34 = A * .5 * (1 + np.tanh(E_weak - E_strong)) + .03
+        r43 = r34 / np.exp(U_tight_1 - U_tight_2)
+        
+        # tight_1 (4) <-> free_2 (5)
+        r45 = rate_factors[:,2] * .05 * np.sqrt(U_tight_2 + 23) 
+        r54 = 0 * ones
+        
+        # free_2 (5) <-> DRX (1)
+        r51 = .1 * ones
+        r15 = .01 * ones
+        
+        # # SRX (6) <-> DRX (1)
+        # # rate equation from https://doi.org/10.1085/jgp.202012604 pages 6 and 8
+        k_0 = .1 # 5/s
+        k_max = .4 # 400/s
+        b = 1.
+        Ca_50 = 10**-6.0 # 10**-pca at which k_0==kmax/2
+        # to drx
+        r61 = (k_0 + ((k_max-k_0)*ca_c**b)/(Ca_50**b + ca_c**b)) * ones 
+        # to srx
+        r16 = rate_factors[:,0] * .1 * ones   
+        
+        
+        # diagonal rates should be set so that each row in the rate matrix sums to 0
+        r11 = - (r12 * ap + r15 + r16)        
+        r22 = - (r21 + r23)
+        r33 = - (r32 + r34)
+        r44 = - (r43 + r45)
+        r55 = - (r54 + r51)
+        r66 = - r61
+        
+        # ############################################################################################################################################
+        #
+        #
+        #
+        #
+        #   Myosin head
+        #   Rate function definitions above
+        # 
+        #
+        #
+        #
+        ############################################################################################################################################
+        
+        
+        Q = np.zeros((720,6,6))
+        
+        Q[:,0,0] = r11
+        Q[:,0,1] = r12 * ap
+        Q[:,0,4] = r15
+        Q[:,0,5] = r16
+        
+        Q[:,1,0] = r21
+        Q[:,1,1] = r22
+        Q[:,1,2] = r23
+        
+        Q[:,2,1] = r32
+        Q[:,2,2] = r33
+        Q[:,2,3] = r34
+        
+        Q[:,3,2] = r43
+        Q[:,3,3] = r44
+        Q[:,3,4] = r45
+        
+        Q[:,4,3] = r54
+        Q[:,4,4] = r55
+        Q[:,4,0] = r51
+        
+        Q[:,5,0] = r61
+        Q[:,5,5] = r66
+
+        
+        # the final array looks like
+        # Q = np.array([
+        #               [r11,  r12,   0,    0,    r15,  r16],            [0,0]  [0,1]  [0,2]  [0,3]  [0,4]  [0,5]
+        #               [r21,  r22,   r23,  0,    0,    0],              [1,0]  [1,1]  [1,2]  [1,3]  [1,4]  [1,5]
+        #               [0,    r32,   r33,  r34,  0,    0],              [2,0]  [2,1]  [2,2]  [2,3]  [2,4]  [2,5]
+        #               [0,    0,     r43,  r44,  r45,  0],              [3,0]  [3,1]  [3,2]  [3,3]  [3,4]  [3,5]
+        #               [r51,  0,     0,    r54,  r55,  0],              [4,0]  [4,1]  [4,2]  [4,3]  [4,4]  [4,5]
+        #               [r61,  0,     0,    0,    0,    r66]             [5,0]  [5,1]  [5,2]  [5,3]  [5,4]  [5,5]
+        #               ])
+        
+        return Q
+    
+    @staticmethod
+    @njit
+    def compare_states(a,b):
+        
+        '''
+        
+        given two lists of old and new states, returns the ids of xbs which need to bind, 
+        unbind, or do nothting (remaing bound or unbound)
+        
+        a = old state list
+        b = new state lits
+        
+        {1: "DRX", 2: "loose", 3: "tight_1", 4:"tight_2", 5:"free_2", 6:"SRX"} 
+        
+        
+        # binidng transitions are from {1,5,6} to {2,3,4}
+        
+        # unbinding transitions are from {2,3,4} to {1,5,6}
+    
+        # bound to bound transitions are from {3,4,5} to {3,4,5}, 
+        
+        # unbound to unbound transitions are from {1,5,6} to {1,5,6}, 
+        
+        '''
+        
+        bind_ids = []
+        unbind_ids = []
+        do_nothing_ids = []
+        
+        for i in range(0,len(a)):
+            
+            if (a[i] == 1 or a[i]==5 or a[i]==6) and (b[i] == 2 or b[i]==3 or b[i]==4):
+                bind_ids.append(i)
+                
+            elif (a[i] == 2 or a[i]==3 or a[i]==4) and (b[i] == 1 or b[i]==5 or b[i]==6):
+                unbind_ids.append(i)
+                
+            elif ((a[i] == 2 or a[i]==3 or a[i]==4) and (b[i] == 2 or b[i]==3 or b[i]==4)) or ((a[i] == 1 or a[i]==5 or a[i]==6) and (b[i] == 1 or b[i]==5 or b[i]==6)):
+                do_nothing_ids.append(i)
+                
+        return bind_ids, unbind_ids, do_nothing_ids
+
+        
+    def thick_transitions(self, dt = None):
+        
+        '''
+        
+        Transitions every crossbridge into a new state based on it's current configuration.
+        
+        
+                               6
+                              SRX 
+                               ^
+                               |
+                               v
+        Tight_2 => Free_2 <=>  DRX  <=> loose <=> tight_1 <=> tight_2
+                            
+           4         5         1         2         3          4
+        
+        
+        
+        To get probablity of a transition, we first find the rate matrix Q:
+            
+            Q =      [r11,  r12*ap,  0,    0,    r15,  r16], 
+                     [r21,  r22,     r23,  0,    0,    0],
+                     [0,    r32,     r33,  r34,  0,    0],
+                     [0,    0,       r43,  r44,  r45,  0],
+                     [r51,  0,       0,    r54,  r55,  0],
+                     [r61,  0,       0,    0,    0,    r66] 
+                     
+        Eeach element rij has units of 1/ms, and r12 is multiplied by the actin permissiveness (0 or 1, signifying binding is possible or not). 
+        The rows of Q should sum to 0
+                     
+        Then the probability of a transition is:
+            
+            P = expm(Q*dt) 
+        
+        where expm() is the matrix exponential (note that np.exp() only gives element-wise exponential). 
+        Rows of P should sum to 1, and will if rate matrix rows sum to 0.
+        Also, if the norm of Q is too large, it will be impossible to find expm(Q). So we set rates at a max of 10^6 in the definitions of r21 and r32. 
+        
+        elements of P are       
+                     #     p11  p12  p13  p14  p15  p16                 [0,0]  [0,1]  [0,2]  [0,3]  [0,4]  [0,5]
+                     #     p21  p22  p23  p24  p25  p26                 [1,0]  [1,1]  [1,2]  [1,3]  [1,4]  [1,5]
+                     #     p31  p32  p33  p34  p35  p36                 [2,0]  [2,1]  [2,2]  [2,3]  [2,4]  [2,5]
+                     #     p41  p42  p43  p44  p45  p46                 [3,0]  [3,1]  [3,2]  [3,3]  [3,4]  [3,5]
+                     #     p51  p52  p53  p54  p55  p56                 [4,0]  [4,1]  [4,2]  [4,3]  [4,4]  [4,5]
+                     #     p61  p62  p63  P64  p56  p66                 [5,0]  [5,1]  [5,2]  [5,3]  [5,4]  [5,5]
+        
+        The element Pij gives the probability that a myosin head which starts in state i will be in state j after a time dt. 
+        
+        
+        First, get every crossbridge's configuration and rate constants as vectors:
+            bs - (x,y) distance between the crossbridge and it's nearest actin binding site neighbor 
+            V  - vector of spring stiffness (k) and rest points (r_0) for both torsional and linear springs in both weak and strong states: 
+                2*2*2=8 values needed to calculate energy 
+            ap = vector of zeros and ones of whether the nearest neighbor actin binding site is possible to bind to (meaning the binding 
+                                                                                                                     site the xb is 
+                                                                                                                     neaest must be in state 3)
+            ca_c - calcium concentration in Molar, used for srx->drx xb transitions
+            
+        pass all this to self.xb_rate_matrix, to return the [720 x 6 x 6] array of rate matricies, which we need to convert to probabilities
+        each 6 x 6 slice is the rate matrix Q of a crossbridge with element Qij being the rate of i changing to j
+        its 6 x 6 because there are 6 states xbs can exist in
+        
+        P = expm(Q * dt) is the matrix of probabilites, with Pij being prob ending up in state j after time dt if you started in state i
+        ** expm is matrix exponential, different from element wise exponential, np.exp will only give element wise **
+        
+        for each [6 x 6] slice in P, get the row i corresponding to the current state
+        
+        roll 720 random numbers to comare with the 720 [1 x 6] row vectors of probability
+        
+        set new states, and binding status for each xb
+        
+        
+        _____________
+        
+        We can set dt = 1000ms to get the stochastic approximate quasi-static (long term) behavior
+        This doesn't account for cooperative effects (explicit or implicit), so its more useful for initiliznig teh half sarc.
+        for example, in doing force-pca curves at low calcium, 
+        
+        
+        '''
+        # set dt, the timestep in P = expm(Q * dt)
+        if dt is None:
+            dt = self.timestep_len
+        
+        # current Ca2+ concentration in M
+        ca_c = self.ca 
+        
+        # current lattice spacing
+        ls = self.lattice_spacing
+      
+        # (x,y) distance between each xb and its nearest binding site
+        bs = np.array([(xb.nearest.axial_location - xb.axial_location, ls) for th in self.thick for cr in th.crowns for xb in cr.crossbridges])
+
+        # get a list of the old (i.e. current) states
+        old_states = np.array([xb.numeric_state for th in self.thick for cr in th.crowns for xb in cr.crossbridges])
+    
+        # globular = r, converter = theta, 
+        # w = weak aka loose, s = strong aka tight
+        # V is all the k and r values for the springs which make up the globular and converter domain for weak and strong states of the xbs
+        # we get all the values we need here so we can vecotroize rate calculations with numpy instead of looping through each xb
+        V = np.array([[
+            xb.g.k_w, 
+            xb.g.r_w, 
+            xb.c.k_w, 
+            xb.c.r_w, 
+          
+            xb.g.k_s, 
+            xb.g.r_s, 
+            xb.c.k_s, 
+            xb.c.r_s, 
+             ] for th in self.thick for cr in th.crowns for xb in cr.crossbridges]) # in cr.crossbridges for cr in th.crowns for th in self.thick]
+
+        # list of all xbs
+        xbs = [xb for th in self.thick for cr in th.crowns for xb in cr.crossbridges]
+
+        # get constants corresponding to each xb's species type
+        # we will multiplyy certain rates by the factors in this array:
+            # rate_factors[:,0] -> mh_srx (r16)
+            # rate_factors[:,1] -> mh_br (r12)
+            # rate_factors[:,2] -> mf_dr (r45)
+        rate_factors = np.array([list(xb.constants.values())[-3:] for xb in xbs])
+
+        # list of actin bs availability status
+        ap = np.array([xb.nearest.permissiveness for th in self.thick for cr in th.crowns for xb in cr.crossbridges])
+
+        # Q gets exported to a function compiled with numba njit
+        # Q is the (720 x 6 x 6) array of rate matricies, each 6 by 6 slice is the transition rate matrix of one of the 720 xbs
+        Q = self.xb_rate_matrix(bs, V, rate_factors, ap, ca_c, temp = self.temp)
+
+        # each row in each Q should sum to 0
+        # if it doesn't you fucked up
+        # don't manipulate Q outsied of xb_rate_matrix function
+        assert(np.max(np.abs(np.sum(Q[:,:,:], axis = 2)))<10**-11)
+
+        # From rate matricies Q, we get the Prob matrices P
+        # P is the (720 x 6 x 6) array of Prob matricies, each 6 by 6 slice is the transition PROBABILITY matrix of one of the 720 xbs
+        P = expm_(Q * dt) #self.xbs_probs_from_rates(Q, bs, ap, dt, old_states)
+        
+        # for each of the 6,6 probability matrices, we want the row which corresponds to that xbs current state, 
+        # for example since P is a matrix with values Pij, we want row i since we want transition probabilities from state i to j
+        Prob = np.empty((720,6))
+        for i in range(0,720):
+            # xb numeric_state goes from 1-6, (rather than 0-5) so we need -1 here
+            Prob[i,:] = P[i,old_states[i]-1,:]
+        
+        # cumsum of each of the prob vectors, to compare against random number
+        Prob_array = np.cumsum(Prob, axis=1)
+        
+        # 720 random numbers [0,1] for stochastic state transisitons for each xb
+        p = np.random.rand(720,1)
+        
+        # for each xb i, the new state is the first entry in each probability vector Prob_array[i] smaller than p[i]
+        # we need to then add back 1 since xb numeric_state goes from 1-6, (rather than 0-5)
+        new_states = np.argmax(p < Prob_array, axis=1) + 1
+        
+        # compare old and new states do determine which undergo binding, unbinding, or no change in binding transisitinso. 
+        # self.compare_states is compiled with numba as a separate function for speed
+        bind_ids, unbind_ids, do_nothing_ids = self.compare_states(old_states, new_states)
+        
+        # convert state id number to string, since that's how we'll store state names
+        num_2_string = {1: "DRX", 2: "loose", 3: "tight_1", 4: "tight_2", 5: "free_2", 6: "SRX"}
+        new_states_ = [num_2_string[i] for i in new_states]
+        
+        # binding transitions are {1,5,6} => {2,3,4,}
+        for ind in bind_ids:
+            
+            # xbs can only bind to a bs site that is not already bound
+            # if xb.nearest is unoccupied, then bind
+            if xbs[ind].nearest.bound_to is None: 
+                # it should only be possible to bind if tm site state is on
+                if xbs[ind].nearest.tm_site.state == 3:
+                    # set xb.bound_to as the nearest bs
+                    xbs[ind].bound_to = xbs[ind].nearest
+                    # set that bs as bound to current xb
+                    xbs[ind].bound_to.bound_to = xbs[ind]
+                    # update xb state
+                    xbs[ind].state = new_states_[ind]
+                else:
+                    # this should never happen..... if it does something is wrong
+                    print(r'shouldnt bind, tm state = ' + str(xbs[ind].nearest.tm_site.state)) #
+                    xbs[ind].state = "DRX"
+                    xbs[ind].bound_to = None
+                    # pdb.set_trace()
+            
+            # if xb.nearest is already bound, just set set state to DRX and don't bind
+            elif xbs[ind].nearest.bound_to is not None:
+                xbs[ind].state = "DRX"
+                xbs[ind].bound_to = None
+                
+        # unbinding transitions are {2,3,4} => {1,5,6}
+        for ind in unbind_ids:
+            
+            # first unlink the xb from the bs
+            xbs[ind].bound_to.bound_to = None
+            # then the bs from the xb
+            xbs[ind].bound_to = None
+            # update state
+            xbs[ind].state = new_states_[ind]
+            
+        # do_nothing_ids conatin bound->bound or unbond->unbound transistions, so we only need
+        # to update the state, not the binding status
+        for ind in do_nothing_ids:
+            # 'do_nothing' is a misnomer, we still need to change the state, just don't change binding status
+            xbs[ind].state = new_states_[ind]
+
+        return 
+       
+    def set_xb_nearest_binding_site(self):
+        '''
+        
+        Sets each crossbrige's nearest actin binding site neighbor. 
+        
+        
+        Each thick and thin filament is sub-divided into 'faces' which are matched to faces on the opposite filament types.
+        So a thick face and thin face have a particular orientation and can only interact with each other
+        
+        so we cycle through each thick filament face, and get every xb on that face and bs on the matching thin filament face
+        then find the nearest bs for each xb
+        
+        
+        '''
+        
+        for th in self.thick:
+            for th_face in th.thick_faces:
+                
+                # get the ids of the xbs on this thick face
+                xb_id = [i.index for i in th_face.xb]
+                # get the ids of the bs sites on this thick face's matching thin face
+                bs_id = [i.index for i in th_face.thin_face.binding_sites]
+                
+                # the plus 13 is b/c we want the binding site closest to the head of the xb, 
+                # not the one closest to the base of the xb and 19.9*cos(47 degrees) = 13
+                # the 'nearest' bs is really the one for which r12=exp(-E/kt) is greatest, so 
+                # this should really depend on lattice spacing, but bs sites on a face are separated by 36 nm
+                # so + 13 should be good enough
+                xb_axial = th.axial[xb_id] + 13 
+                bs_axial = self.thin[th_face.thin_face.parent_thin.index].axial[bs_id]
+                
+                # dist matrix, every xb's distance on this thick face to every bs on the matching thin face, 
+                # in other words, element i,j is the ith xb's distance to the jth bs site, for this thick face - thin face pair
+                dist = np.abs(xb_axial[:, np.newaxis] - bs_axial)
+                # get the index of the single closest bs to each xb
+                Closest_bs = dist.argmin(axis=1)
+                
+                # iterate through the xb's on this thick face and assign nearest
+                for i, xb in enumerate(th_face.xb):
+                    xb.nearest = xb.thin_face.binding_sites[Closest_bs[i]]
+                    
+                    
+        return
+                
+    def Update_axial_locations(self, new_axial_locations):
+        '''
+        
+        Use the output of X = self.Newton() and update the axial location of all spring nodes.
+        X should be of size 1 by (total_xb_num + total_bs_num)=960
+        
+        There are 60 nodes in each of the 4 thick filaments
+        
+        There are 90 nodes in each of the 8 thin filaments
+        
+        
+        '''   
+        
+        # 60 nodes in each of the 4 thick filament
+        self.thick[0].axial = new_axial_locations[60*0:60*0+60]
+        self.thick[1].axial = new_axial_locations[60*1:60*1+60]
+        self.thick[2].axial = new_axial_locations[60*2:60*2+60]
+        self.thick[3].axial = new_axial_locations[60*3:60*3+60]
+        
+        # 90 nodes in each of the 8 thin filaments, + 240 offset to account for 60*4 xb nodes
+        self.thin[0].axial = new_axial_locations[240 + 0*90: 240 + 0*90 +90]
+        self.thin[1].axial = new_axial_locations[240 + 1*90: 240 + 1*90 +90]
+        self.thin[2].axial = new_axial_locations[240 + 2*90: 240 + 2*90 +90]
+        self.thin[3].axial = new_axial_locations[240 + 3*90: 240 + 3*90 +90]
+        self.thin[4].axial = new_axial_locations[240 + 4*90: 240 + 4*90 +90]
+        self.thin[5].axial = new_axial_locations[240 + 5*90: 240 + 5*90 +90]
+        self.thin[6].axial = new_axial_locations[240 + 6*90: 240 + 6*90 +90]
+        self.thin[7].axial = new_axial_locations[240 + 7*90: 240 + 7*90 +90]
+        
+        return
+
+    def Newton(self):
+        '''
+        Newton's method nonlinear solver finds x0 such that F(x0)=0
+        
+        iteratively updates the guess x by:
+            
+            x_new_guess = x_old_guess - f(x_old_guess) / f'(x_old_guess)
+        
+        Jacobian is the matrix form of f' containing the entries df_i/dx_j
+        
+        see: https://en.wikipedia.org/wiki/Newton%27s_method#Systems_of_equations
+        '''
+        
+        # current force
+        F = np.concatenate((np.concatenate([i.axial_force() for i in self.thick]), 
+                                     np.concatenate([i.axial_force() for i in self.thin])))
+        
+        num = 0
+        # iterate as long as abs(F) > .06, arbitrary number
+        while np.max(np.abs(F)) > .06:
+            
+            # initial guess is current configuration
+            guess = np.concatenate((np.concatenate([i.axial for i in self.thick]), np.concatenate([i.axial for i in self.thin])))
+            
+            # get Jacobian matrix J for current sarcomere configuration
+            # elements i,j are the derivative of the force on node i with respect to axial location of node j
+            # see self.Jacobian_matrix and hs_stiffness_matrix
+            J = self.Jacobian_Matrix()
+            
+            # solve J*delta_guess = F with sparse matrix solver spsolve, 
+            # solve(a,b) is faster taking inverse
+            new_guess = guess - spsolve(J, F)
+            
+            # update new axial spacings
+            self.Update_axial_locations(new_guess)
+                     
+            # find new F - rerun if max(abs(F)) < cut-off value of .06 pN  
+            F = np.concatenate((np.concatenate([i.axial_force() for i in self.thick]), 
+                                         np.concatenate([i.axial_force() for i in self.thin])))
+            num = num + 1
+            if num > 100:
+                # this should never happen, if it does something is wrong
+                print('failed to converge after ' + str(num) + ' steps, max f = ' + str(np.max(np.abs(F))))
+                # revert to old method
+                self.settle()
+                break
+            
+        return
+            
     @property
     def current_timestep(self):
         """Return the current timestep"""
@@ -644,6 +1852,7 @@ class hs:
                 self.z_line = td['z_line'][i]
             if 'pCa' in td:
                 self.pCa = td['pCa'][i]
+                self.ca = 10 ** (-td['pCa'][i]) # store concentration at half sarcomere level, to prevent recalculating at every site at every timestep
         self._current_timestep = i
         return
 
@@ -810,8 +2019,33 @@ class hs:
         return sum([t.radial_tension() for t in self.thick])
 
     def radial_force(self):
-        """The sum of the thick filaments' radial forces, as a (y,z) vector"""
-        return np.sum([t.radial_force_of_filament() for t in self.thick], 0)
+        """The sum of all of the thick filaments' radial forces, as a (y,z) vector"""
+        # pdb.set_trace()
+        # count, value in enumerate(values)
+        radial_forces = []
+        for thick in self.thick:
+            for cr in thick.crowns:
+                for ind, xb in enumerate(cr.crossbridges):
+                    pass
+                
+                    if xb.state in {'loose', 'tight_1', 'tight_2'}:
+                        
+                        F_mag = xb.radial_force()
+                        orient = cr.orientations[ind]
+                        
+                        # force_mag = crossbridge.radial_force()
+                        radial_forces.append(np.multiply(F_mag, orient))
+                        
+                        # print(xb.radial_force(), cr.orientations[ind] )
+                        
+                        
+        if not radial_forces:
+            return [0., 0.]
+        else:
+            return np.sum(radial_forces, 0)
+        
+        
+        # return np.sum([t.radial_force_of_filament() for t in self.thick], 0)
 
     def _single_settle(self, factor=0.95):
         """Settle down now, just a little bit"""
@@ -869,16 +2103,34 @@ class hs:
 
     def tm_rates(self):
         """Average rates of the contained TmSites (for monitoring)"""
-        rates = None
-        for actin in self.thin:
-            if rates is None:
-                rates = actin.get_tm_rates()
-            else:
-                for key, value in actin.get_tm_rates().items():
-                    rates[key] += value
-        for key in rates:
-            rates[key] /= len(self.thin)
+        
+        # rates = None
+        # for thin in self.thin:
+        #     if rates is None:
+        #         rates = thin.get_tm_rates()
+        #     else:
+        #         for key, value in thin.get_tm_rates().items():
+        #             rates[key] += value
+        # for key in rates:
+        #     rates[key] /= len(self.thin)
 
+        # Qs = [bs.tm_site.Q_matrix for thin in self.thin for bs in thin.binding_sites]
+        
+        # average_tm_site_rates = np.mean(Qs, axis=0)
+        
+        average_tm_site_rates = self.tm_rates_ #np.mean(Qs, axis=0)
+        
+        rates = {
+            'tm_rate_12': average_tm_site_rates[0,1], 
+            'tm_rate_21': average_tm_site_rates[1,0], 
+            'tm_rate_23': average_tm_site_rates[1,2], 
+            'tm_rate_32': average_tm_site_rates[2,1], 
+            'tm_rate_34': average_tm_site_rates[2,3], 
+            'tm_rate_43': average_tm_site_rates[3,2], 
+            'tm_rate_41': average_tm_site_rates[3,0], 
+            'tm_rate_14': average_tm_site_rates[0,3]
+            }
+        
         return rates
 
     def update_ls_from_poisson_ratio(self):

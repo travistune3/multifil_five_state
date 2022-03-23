@@ -11,7 +11,8 @@ Created by Dave Williams on 2010-01-04.
 import numpy as np
 
 from . import tm
-
+from bisect import bisect_left
+import pdb
 
 class BindingSite:
     """A singular globular actin site"""
@@ -143,8 +144,9 @@ class BindingSite:
     @property
     def permissiveness(self):
         """What is your availability to bind, based on tropomyosin status?"""
-        return self.tm_site.binding_influence
-
+        # return self.tm_site.binding_influence
+        return 1 if self.tm_site.state == 3 else 0
+        
     @property
     def state(self):
         """Return the current numerical state, 0/unbound or 1/bound"""
@@ -230,6 +232,27 @@ class ThinFace:
         # Sub-structure keys
         self.binding_sites = [self.parent_thin.resolve_address(bsa) for bsa in thinface_d['binding_sites']]
 
+    @staticmethod
+    def take_closest_index(myList, myNumber):
+        """
+        Assumes myList is sorted. Returns closest value to myNumber.
+    
+        If two numbers are equally close, return the smallest number.
+        
+        Bisect is faster than np.searchsorted if list is small
+        """
+        pos = bisect_left(myList, myNumber)
+        if pos == 0:
+            return 0
+        if pos == len(myList):
+            return pos-1
+        before = myList[pos - 1]
+        after = myList[pos]
+        if after - myNumber < myNumber - before:
+            return pos
+        else:
+            return pos-1
+
     def nearest(self, axial_location):
         """Where is the nearest binding site?
         There a fair number of cases that must be dealt with here. When
@@ -248,20 +271,35 @@ class ThinFace:
         hiding_line = self.parent_thin.hiding_line
         axial_location = max(hiding_line, axial_location)
         face_locs = [site.axial_location for site in self.binding_sites]
-        next_index = np.searchsorted(face_locs, axial_location)
-        prev_index = next_index - 1
-        # If not using a very short SL, where the end face loc is closest,
-        # then find distances to two closest locations
-        if next_index != len(face_locs):
-            dists = np.abs((face_locs[prev_index] - axial_location,
-                            face_locs[next_index] - axial_location))
-        else:
-            return self.binding_sites[prev_index] # If at end, return end
-        # If prior site was closer, give it, else give next
-        if dists[0] < dists[1]:
-            return self.binding_sites[prev_index]
-        else:
-            return self.binding_sites[next_index]
+        
+        # pdb.set_trace()
+        
+        # next_index = np.searchsorted(face_locs, axial_location)
+        
+        i = self.take_closest_index(face_locs, axial_location)
+        
+        
+        # prev_index = next_index - 1
+        # # If not using a very short SL, where the end face loc is closest,
+        # # then find distances to two closest locations
+        # if next_index != len(face_locs):
+        #     dists = np.abs((face_locs[prev_index] - axial_location,
+        #                     face_locs[next_index] - axial_location))
+        # else:
+        #     return self.binding_sites[prev_index] # If at end, return end
+        # # If prior site was closer, give it, else give next
+        # if dists[0] < dists[1]:
+        #     # return self.binding_sites[prev_index]
+        #     index = prev_index
+        # else:
+        #     # return self.binding_sites[next_index]
+        #     index = next_index
+            
+        # if i != index:
+        #     pass
+        #     pdb.set_trace()
+            
+        return self.binding_sites[i]
 
     def radial_force(self):
         """What is the radial force this face experiences?
@@ -721,6 +759,10 @@ class ThinFilament:
         # m-line side of the thin filament
         subject_to_forces = self._axial_thin_filament_forces()[index:]
         tension = np.sum(subject_to_forces)
+        
+        # if tension != 0:
+        #     pdb.set_trace()
+            
         return tension
 
     def update_axial_locations(self, flat_axial_locs):

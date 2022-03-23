@@ -11,7 +11,6 @@ run.sarc_file manages recording of complete sarcomere logs to a local file
 
 run.data_file manages recording abbreviated data logs to a local file
 
-run.s3 maintains a persistent s3 connection through all of this
 
 Created by Dave Williams on 2016-07-02
 """
@@ -22,7 +21,6 @@ import shutil
 import subprocess
 import time
 import multiprocessing as mp
-import boto
 import numpy as np
 
 from multifil import hs
@@ -35,23 +33,18 @@ import pdb
 class manage:
     """Run, now with extra object flavor"""
 
-    def __init__(self, metafile, unattended=True, use_sarc=True, live_update=None):
+    def __init__(self, metafile, unattended=True, use_sarc=False, live_update=None):
         """Create a managed instance of the sarc, optionally running it
 
         Parameters
         ----------
         metafile: string
             The location of the metafile describing the run to be worked
-            through. Can be local or on S3. Assumed to be on S3 if the local
-            file does not exist.
+            through. 
         unattended: boolean
             Whether to complete the run without further intervention or treat
             as an interactive session.
         """
-        if use_aws:
-            self.s3 = s3()
-        else:
-            self.s3 = None
         self.uuid = os.path.basename(metafile).split('.')[0]
         self.working_dir = self._make_working_dir(self.uuid)
         self.metafile = self._parse_metafile_location(metafile)
@@ -81,7 +74,6 @@ class manage:
         """Parse the passed location, downloading the metafile if necessary"""
         if not os.path.exists(metafile):
             raise FileNotFoundError("meta file not found")
-            # return self.s3.pull_from_s3(metafile, self.working_dir)
         else:
             mfn = '/' + os.path.basename(metafile)
             return shutil.copyfile(metafile, self.working_dir + mfn)
@@ -112,6 +104,9 @@ class manage:
         for prop in ['z_line', 'pCa']:
             if type(meta[prop]) is list:
                 time_dep_dict[prop] = meta[prop]
+        
+        # set temperatue as hs-level paramter
+        # pass in units of C, convert here to K
 
         # Instantiate sarcomere
         sarc = hs.hs(
@@ -121,6 +116,7 @@ class manage:
             pCa=pCa,
             timestep_len=meta['timestep_length'],
             time_dependence=time_dep_dict,
+            temp = meta['temp'],
             **hs_params
         )
         return sarc
@@ -137,12 +133,6 @@ class manage:
         """
         temp_loc = temp_full_fn
         file_name = '/' + temp_loc.split('/')[-1]
-        # Upload to S3
-        if self.meta['path_s3'] is not None:
-            # TODO see line 50
-            raise BrokenPipeError("AWS services are not currently setup for multifil.")
-            # s3_loc = self.meta['path_s3']
-            # self.s3.push_to_s3(temp_loc, s3_loc)
         # Store in final local path specified in the meta settings
         if self.meta['path_local'] is not None:
             local_loc = os.path.abspath(os.path.expanduser(
@@ -159,7 +149,7 @@ class manage:
 
     def run_and_save(self):
         """Complete a run according to the loaded meta configuration and save
-        results to meta-specified s3 and local locations"""
+        results to meta-specified local locations"""
         exitcode = None
         result = None
 
@@ -211,8 +201,10 @@ class manage:
 
             self._copy_file_to_final_location(self.metafile)
             os.remove(self.metafile)
-
-            os.rmdir(self.working_dir)
+            
+            # pdb.set_trace()
+            
+            # os.rmdir(self.working_dir)
             try:
                 os.rmdir('/tmp/_multifil_tmp/')
             except OSError:
@@ -244,6 +236,7 @@ class sarc_file:
         self.sarc = sarc
         self.meta = meta
         self.working_directory = working_dir
+        # pdb.set_trace()
         sarc_name = '/' + meta['name'] + '.sarc.json'
         self.working_filename = self.working_directory + sarc_name
 
@@ -270,20 +263,24 @@ class sarc_file:
         self.working_file.write('\n]')
         self.working_file.close()
         time.sleep(1)
+        # pdb.set_trace()
         self.zip_filename = self.meta['name'] + '.sarc.tar.gz'
         cp = subprocess.run(['tar', 'czf', self.zip_filename,
                              '-C', self.working_directory,
                              self.working_filename])
         if self.print_zip:
             print(cp)
-        os.remove(self.working_filename)
+        # pdb.set_trace()
+        # os.remove(self.working_filename) # finalize
         return self.zip_filename
 
     def delete(self):
         """Delete the sarc zip file from disk"""
         try:
+            pass
             # print("removing zip filename\n\t", self.zip_filename, "\n")
-            os.remove(self.zip_filename)
+            # pdb.set_trace()
+            # os.remove(self.zip_filename) # delete
         except FileNotFoundError:
             print("Error removing temp file, check C:\/tmp for", self.zip_filename)
 
@@ -309,7 +306,7 @@ class data_file:
             'xb_fraction_DRX': [], # DRX unattached, 
             'xb_fraction_loose_1': [], # loosely bound, pre power stroke 
             'xb_fraction_tight_1': [], # post power stroke, tightly bound 1 
-            'xb_fraction_tight_2': [], # post power stroke, tightly bound 1 
+            'xb_fraction_tight_2': [], # post power stroke, tightly bound 2 
             'xb_fraction_free_2': [], # unbound, post detached state, pre Hydrolysis  
             'xb_fraction_SRX': [], # SRX 
             'xb_trans_12': [],
@@ -363,7 +360,7 @@ class data_file:
         radial_force = self.sarc.radial_force()
         xb_fracs = self.sarc.get_xb_frac_in_states()
         # pdb.set_trace()
-        xb_trans = sum(sum(self.sarc.last_transitions, []), [])
+        xb_trans = ['12'] #sum(sum(self.sarc.last_transitions, []), [])
         tm_fracs = self.sarc.get_tm_frac_in_states()
         tm_rates = self.sarc.tm_rates()
         act_perm = np.mean(self.sarc.actin_permissiveness)
@@ -440,174 +437,3 @@ class data_file:
             print("File not created yet")
 
 
-class s3:
-    def __init__(self):
-        """Provide an interface to to S3 that hides some error handling"""
-        self._refresh_s3_connection()
-
-    def _refresh_s3_connection(self):
-        """Reconnect to s3, the connection gets dropped sometimes"""
-        self.s3 = boto.connect_s3()
-
-    def _get_bucket(self, bucket_name):
-        """Return link to a bucket name"""
-        try:
-            bucket = self.s3.get_bucket(bucket_name)
-        except (boto.exception.BotoClientError,
-                boto.exception.BotoClientError) as e:
-            print(e)
-            print("Trying to reconnect to s3")
-            self._refresh_s3_connection()
-            bucket = self.s3.get_bucket(bucket_name)
-        return bucket
-
-    def pull_from_s3(self, name, local='./'):
-        # noinspection PyUnresolvedReferences
-        """Given a key on S3, download it to a local file
-
-        Parameters
-        ----------
-        name: string
-            bucket/key-name to download. can be prefixed by 's3://', '/', or
-            by nothing
-        local: string
-            local directory to download key into, defaults to current directory
-
-        Returns
-        -------
-        None
-
-        Examples
-        --------
-        >>>pull_from_s3('s3://just_a_test_bucket/test')
-        >>>os.remove('test')
-        >>>pull_from_s3('just_a_test_bucket/test')
-        >>>os.remove('test')
-        """
-        # Parse name
-        bucket_name = [n for n in name.split('/') if len(n) > 3][0]  # rm s3:// & /
-        key_name = name[len(bucket_name) + name.index(bucket_name):]
-        file_name = key_name.split('/')[-1]
-        # Connect to bucket
-        bucket = self._get_bucket(bucket_name)
-        # Connect to key/file
-        key = bucket.get_key(key_name)
-        # Prep local dirs to receive key
-        local = os.path.abspath(os.path.expanduser(local))
-        os.makedirs(local, exist_ok=True)
-        # Download key
-        downloaded_name = local + '/' + file_name
-        key.get_contents_to_filename(downloaded_name)
-        if key.size != os.stat(downloaded_name).st_size:
-            print("Size mismatch, downloading again for %s: " % downloaded_name)
-            key.get_contents_to_filename(downloaded_name)
-        return downloaded_name
-
-    def push_to_s3(self, local, remote):
-        """Given a local file, push it to a location on s3
-
-        Parameters
-        ----------
-        local: string
-            path to local file to be uploaded to s3
-        remote: string
-            bucket and (optional) folder to upload local file to, the resulting
-            key will be remote+/+local_filename. Can be in formats:
-                s3://bucket/optional_folder/key
-                /bucket/optional_folder/key
-                bucket/optional_folder/key
-
-        Returns
-        -------
-        None
-        """
-        # Parse names
-        file_name = local.split('/')[-1]
-        bucket_name = [n for n in remote.split('/') if len(n) > 3][0]
-        key_name = remote[len(bucket_name) + remote.index(bucket_name):]
-        if len(key_name) == 0 or key_name[-1] != '/':
-            key_name += '/'
-        # Parse bucket and folders
-        bucket = self._get_bucket(bucket_name)
-        key = bucket.new_key(key_name + file_name)
-        key.set_contents_from_filename(local)
-        if key.size != os.stat(local).st_size:
-            print("Size mismatch, uploading again for %s: " % local)
-            key.set_contents_from_filename(local)
-        return
-
-
-# ## Manage multiple local runs
-class manage_async:
-    """This class allows the user to run concurrent local simulations using a multi-core cpu"""
-    #   Modern computers typically have at least 2 physical cores in their cpu
-    #       able to perform processes truly asynchronously, given that they don't need to exchange
-    #       information to complete these processes. If they require info exchange, that is also possible
-    #       to facilitate, but may end up requiring some wait time to ensure the processes complete correctly.
-    #   In addition to physical cores, modern cpus have a hardware-based trick called hyper-threading
-    #       that allows them to switch between two things quickly enough that they get very close
-    #       to executing two processes at once.
-    #   This means that a 4 core cpu with hyper-threading can have 8 things going on at the same time.
-
-    def __init__(self, meta_files, unattended=True, use_sarc=True, force=False, live_update=None):
-        """Create a managed batch of instances of sarc objects, optionally running them
-
-        Parameters
-        ----------
-        meta_files: list of strings
-            A list of the locations of the metafile describing the run to be worked
-            through. Can be local or on S3. Assumed to be on S3 if the local
-            file does not exist.
-        unattended: boolean
-            Whether to complete the run without further intervention or treat
-            as an interactive session.
-        """
-        max_threads = max(2, int(0.75 * mp.cpu_count()))
-        if len(meta_files) >= mp.cpu_count():
-            print("More instances than threads,", end=" ")
-            if not force:
-                print("these files will not be run:")
-                for meta_file in meta_files[max_threads:]:
-                    print(meta_file)
-                meta_files = meta_files[0:max_threads]
-            else:
-                print("forcing anyway."
-                      "\nBehavior will be dependent on python's built in class multiprocessing.")
-        elif len(meta_files) > max_threads:
-            print("More that 75% of available threads will be used for simulations, proceeding anyway.")
-
-        live_update_list = []
-        if isinstance(live_update, list):
-            live_update_list = live_update
-        elif isinstance(live_update, (int, float)):
-            live_update_list.append(live_update)
-        while len(live_update_list) < len(meta_files):
-            live_update_list.append(None)
-        print(live_update_list)
-
-        self.managers = []
-        for meta_file, live_update in zip(meta_files, live_update_list):
-            self.managers.append(manage(meta_file, unattended, use_sarc, live_update))
-
-        self.processes = []
-        for manager in self.managers:
-            self.processes.append(mp.Process(target=manager.run_and_save, args=()))
-
-            if unattended:
-                try:
-                    self.run_and_save()
-                except Exception as e:
-                    mp.current_process().terminate()
-                    print(e)
-
-    def run_and_save(self):
-        start = time.time()
-        for process in self.processes:
-            process.start()
-        for process in self.processes:
-            process.join()
-
-        end = time.time()
-        print(end - start, "seconds")
-
-        return None, 0

@@ -27,7 +27,6 @@ Example
 ...  'lattice_spacing_func': None,
 ...  'name': ...,
 ...  'path_local': './',
-...  'path_s3': None,
 ...  'timestep_length': 0.1,
 ...  'timestep_number': 100,
 ...  'z_line': None,
@@ -155,12 +154,12 @@ def twitch_pCa_trace(amp, tp, w, asy, time, stt, dur):
         pCa.append(-np.log10(c_ca))
     while len(pCa) < len(time):
         pCa.append(baseline)
-    return pCa
+    return np.array(pCa)
 
 
 # ## Configure a run via a saved meta file
-def emit(path_local, path_s3, time, poisson=0.0, ls=None, z_line=None,
-         pCa=None, comment=None, write=True, hs_params=None, **kwargs):
+def emit(path_local, time, poisson=0.0, ls=None, z_line=None,
+         pCa=None, comment=None, write=True, hs_params=None, temp=26.15,  **kwargs):
     """Produce a structured JSON file that will be consumed to create a run
 
     Import emit into an interactive workspace and populate a directory with
@@ -171,9 +170,6 @@ def emit(path_local, path_s3, time, poisson=0.0, ls=None, z_line=None,
     path_local: string
         The local (absolute or relative) directory to which we save both
         emitted files and run output.
-    path_s3: string
-        The s3 bucket (and optional folder) to save run output to and to which
-        the emitted files should be uploaded.
     time: iterable
         Time trace for run, in ms
     poisson: float
@@ -218,7 +214,6 @@ def emit(path_local, path_s3, time, poisson=0.0, ls=None, z_line=None,
     ...  'lattice_spacing_func': None,
     ...  'name': ...,
     ...  'path_local': './',
-    ...  'path_s3': None,
     ...  'timestep_length': 0.1,
     ...  'timestep_number': 100,
     ...  'z_line': None,
@@ -233,12 +228,12 @@ def emit(path_local, path_s3, time, poisson=0.0, ls=None, z_line=None,
     run_d['name'] = name
     run_d['comment'] = comment
     run_d['path_local'] = path_local
-    run_d['path_s3'] = path_s3
     run_d['poisson_ratio'] = poisson
     run_d['lattice_spacing'] = ls
     run_d['z_line'] = z_line
     run_d['pCa'] = pCa
     run_d['hs_params'] = hs_params
+    run_d['temp'] = temp
     run_d['timestep_length'] = np.diff(time)[0]
     run_d['timestep_number'] = len(time)
     # ## Include kwargs

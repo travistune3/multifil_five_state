@@ -6,9 +6,9 @@ mf.py - A myosin thick filament
 Created by Dave Williams on 2010-01-04.
 """
 
-from . import mh
+from multifil import mh
 import numpy as np
-
+import pdb
 
 class Crown:
     """Three cross-bridges on a thick filament at a given axial location
@@ -426,7 +426,7 @@ class ThickFilament:
         bare_zone = 58  # Length of the area before any crowns, nm
         crown_spacing = 14.3    # Spacing between adjacent crowns, nm
         n_cr = 60   # Number of myosin crowns
-        self.axial = [bare_zone + n*crown_spacing for n in range(n_cr)]
+        self.axial = np.array([bare_zone + n*crown_spacing for n in range(n_cr)])
         self.rests = np.diff(np.hstack([0, self.axial]))
         # Instantiate the faces
         self.thick_faces = []
@@ -690,7 +690,7 @@ class ThickFilament:
         for thick_face in self.thick_faces:
             titin = thick_face.titin_fil
             titin_force = titin.axial_force()
-            normed = titin_force * titin.stiffness() / self.k
+            normed = titin_force #* titin.stiffness() / self.k
             normed_titin_forces.append(normed)
         return np.sum(normed_titin_forces)
 

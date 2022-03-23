@@ -135,6 +135,7 @@ class Titin:
         myo_loc = self.thick_face.get_axial_location(-1)
         ls = self.parent_lattice.lattice_spacing
         length = np.sqrt((act_loc - myo_loc) * (act_loc - myo_loc) + ls * ls)
+        # print(length)
         return length
 
     def stiffness(self):
