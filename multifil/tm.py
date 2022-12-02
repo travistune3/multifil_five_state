@@ -75,30 +75,30 @@ class TmSite:
         
         
         # # travis
-        # # pca coop = 100 ;  Tune
-        # K1 = 2.6e5  # per mole Ca
-        # K2 = 1.3e2  # unit-less
-        # K3 = 9.1e-1  # unit-less
-        # K4 = None  # moles Ca
-        # # Forward Rate constants - !!! r14 is overridden to 0 ms-1 in _r14()
-        # # todo cite
-        # k_12 = 1e7  # per mole Ca per sec
-        # k_23 = 1.4e4  # per sec
-        # k_34 = 2e3  # per sec
-        # k_41 = 110  # per sec
-        
-        ## #   anthony
-        #######################
-        K1 = 1.47e6  # per mole Ca
+        # pca coop = 100 ;  Tune
+        K1 = 2.6e5  # per mole Ca
         K2 = 1.3e2  # unit-less
         K3 = 9.1e-1  # unit-less
         K4 = None  # moles Ca
-        # # Forward Rate constants - !!! r14 is overridden to 0 ms-1 in _r14()
-        # # todo cite
-        k_12 = 1.7e7  # per mole Ca per sec
+        # Forward Rate constants - !!! r14 is overridden to 0 ms-1 in _r14()
+        # todo cite
+        k_12 = 1e7  # per mole Ca per sec
         k_23 = 1.4e4  # per sec
         k_34 = 2e3  # per sec
         k_41 = 110  # per sec
+        
+        ## #   anthony
+        #######################
+        # K1 = 1.47e6  # per mole Ca
+        # K2 = 1.3e2  # unit-less
+        # K3 = 9.1e-1  # unit-less
+        # K4 = None  # moles Ca
+        # # # Forward Rate constants - !!! r14 is overridden to 0 ms-1 in _r14()
+        # # # todo cite
+        # k_12 = 1.7e7  # per mole Ca per sec
+        # k_23 = 1.4e4  # per sec
+        # k_34 = 2e3  # per sec
+        # k_41 = 110  # per sec
         
         ## #dave williams
         ## ##################################
@@ -553,6 +553,7 @@ class TmSite:
         
         
     def _process_params(self, tm_params):
+        
         # cooperative multiplier
         key = 'tm_coop'
         if key in tm_params.keys():
@@ -563,50 +564,50 @@ class TmSite:
         # K1
         key = 'tm_K1'
         if key in tm_params.keys():
-            self._K1 = tm_params.pop(key)
+            self._K1 *= tm_params.pop(key)
         self.constants[key] = self._K1
 
         # forward rate - k_12
         key = 'tm_k_12'
         if key in tm_params.keys():
-            self._k_12 = tm_params.pop(key)
+            self._k_12 *= tm_params.pop(key)
         self.constants[key] = self._k_12
 
         # ## Second step ---------------------------
         # K2
         key = 'tm_K2'
         if key in tm_params.keys():
-            self._K2 = tm_params.pop(key)
+            self._K2 *= tm_params.pop(key)
         self.constants[key] = self._K2
 
         # forward rate - k_23
         key = 'tm_k_23'
         if key in tm_params.keys():
-            self._k_23 = tm_params.pop(key)
+            self._k_23 *= tm_params.pop(key)
         self.constants[key] = self._k_23
 
         # ## Third step ---------------------------
         key = 'tm_K3'
         if key in tm_params.keys():
-            self._K3 = tm_params.pop(key)
+            self._K3 *= tm_params.pop(key)
         self.constants[key] = self._K3
 
         # forward rate - k_34
         key = 'tm_k_34'
         if key in tm_params.keys():
-            self._k_34 = tm_params.pop(key)
+            self._k_34 *= tm_params.pop(key)
         self.constants[key] = self._k_34
 
         # ## Fourth step (3 -> 0) -----------------
         key = 'tm_K4'
         if key in tm_params.keys():
-            self._K4 = tm_params.pop(key)
+            self._K4 *= tm_params.pop(key)
         self.constants[key] = self._K4
 
         # forward rate - k_41
         key = 'tm_k_41'
         if key in tm_params.keys():
-            self._k_41 = tm_params.pop(key)
+            self._k_41 *= tm_params.pop(key)
         self.constants[key] = self._k_41
 
 

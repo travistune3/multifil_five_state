@@ -11,14 +11,14 @@ Created by Joe Powers and Dave Williams on 2017-02-17
 import numpy as np
 import warnings
 import numpy.random as random
-
+import pdb
 
 class Titin:
     """This is all about the titin filament"""
 
     # kwargs that can be used to edit titin phenotype
     # titin can also accept phenotype profiles
-    VALID_PARAMS = {'ti_a': "pN", 'ti_b': "nm-1"}
+    VALID_PARAMS = {'ti_a': "pN", 'ti_b': "nm-1", 'ti_rest': "nm"}
 
     def __init__(self, parent_lattice, index, thick_face, thin_face, **ti_params):
         """Initialize the titin filament.
@@ -82,6 +82,11 @@ class Titin:
         if "ti_b" in ti_params.keys():
             self.b = ti_params.pop("ti_b")
         self.constants['ti_b'] = self.b
+        
+        # Titin constant b
+        if "ti_rest" in ti_params.keys():
+            self.rest = ti_params.pop("ti_rest")
+        self.constants['ti_rest'] = self.rest
 
         # Print kwargs not digested
         for key in ti_params.keys():
@@ -144,6 +149,44 @@ class Titin:
         force with respect to x. D[a*exp(b*x), x] = a*b*exp(b*x)
         """
         return self.force() * self.b
+
+
+    def dForce_dMnode(self, m):
+        '''
+        the  derivartive of force w.r.t m, the axial location of the myosin node connected to titin.
+        
+        
+        import sympy as sp
+        a, b, z, m, ls, rest = sp.symbols('a b z m ls rest')
+        F_ti = a * sp.exp(b * (sp.sqrt((z - m)**2 + ls**2) - rest)) * sp.atan2(ls,z-m)
+        DF_dm = F_ti.diff(m)
+
+
+        needed for the Jacobian matric for Newton's method     
+
+        titin = thick.thick_faces[0].titin_fil
+        a = titin.a
+        b = titin.b
+        z = titin.thin_face.parent_thin.parent_lattice.z_line
+        ls = titin.parent_lattice.lattice_spacing
+        rest = titin.rest
+        
+        '''
+        
+        a = self.a
+        b = self.b
+        z = self.thin_face.parent_thin.parent_lattice.z_line
+        ls = self.parent_lattice.lattice_spacing
+        rest = self.rest
+        assert(m == self.thick_face.get_axial_location(-1))
+        # pdb.set_trace()
+        if np.sqrt(ls**2 + (-m + z)**2)<rest:
+            # titin buckles
+            return 0
+        else:
+            return a*b*(m - z)*np.exp(b*(-rest + np.sqrt(ls**2 + (-m + z)**2)))*np.arctan2(ls, -m + z)/np.sqrt(ls**2 + (-m + z)**2) + a*ls*np.exp(b*(-rest + np.sqrt(ls**2 + (-m + z)**2)))/(ls**2 + (-m + z)**2)
+        
+
 
     def force(self):
         """Calculate the total force the titin filament exerts"""

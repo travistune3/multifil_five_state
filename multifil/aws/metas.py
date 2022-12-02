@@ -234,6 +234,7 @@ def emit(path_local, time, poisson=0.0, ls=None, z_line=None,
     run_d['pCa'] = pCa
     run_d['hs_params'] = hs_params
     run_d['temp'] = temp
+    run_d['time'] = time
     run_d['timestep_length'] = np.diff(time)[0]
     run_d['timestep_number'] = len(time)
     # ## Include kwargs

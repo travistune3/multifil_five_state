@@ -379,6 +379,8 @@ class Head:
         self._tip_ts = -1   # WARNING - this is only for use by the Head Class and no one else. Use property Head.tip
         self._br = 1    # binding rate modifier
         self._dr = 1    # detachment rate modifier
+        self._mh_r34 = 1 # 34 rate modifier 
+        self._mh_r23 = 1
         self._srx = 1    # detachment rate modifier
         self.P_limit = None
         
@@ -491,29 +493,29 @@ class Head:
         except:
             pdb.set_trace()
 
-    @property
-    def timestep_len(self):
-        raise AttributeError("method timestep_len in class Head must be overridden by Child class.")
-        # Prevent inheritance issues where Head objects cycle at ts_l = 1 ms if not told otherwise.
-        # AMA 25MAR2020
+    # @property
+    # def timestep_len(self):
+    #     raise AttributeError("method timestep_len in class Head must be overridden by Child class.")
+    #     # Prevent inheritance issues where Head objects cycle at ts_l = 1 ms if not told otherwise.
+    #     # AMA 25MAR2020
 
-    @property
-    def _current_ts(self):
-        raise AttributeError("method current_ts in class Head must be overridden by Child class.")
-        # Prevent inheritance issues
-        # AMA 24JUN2020
+    # @property
+    # def _current_ts(self):
+    #     raise AttributeError("method current_ts in class Head must be overridden by Child class.")
+    #     # Prevent inheritance issues
+    #     # AMA 24JUN2020
 
-    @property
-    def _current_ls(self):
-        raise AttributeError("method current_ls in class Head must be overridden by Child class.")
-        # Prevent inheritance issues
-        # AMA 24JUN2020
+    # @property
+    # def _current_ls(self):
+    #     raise AttributeError("method current_ls in class Head must be overridden by Child class.")
+    #     # Prevent inheritance issues
+    #     # AMA 24JUN2020
 
-    @property
-    def unbound_tip_loc(self):
-        if self._tip is None or self._tip_ts != self._current_ts:
-            self._update_tip()
-        return self._tip
+    # @property
+    # def unbound_tip_loc(self):
+    #     if self._tip is None or self._tip_ts != self._current_ts:
+    #         self._update_tip()
+    #     return self._tip
 
     # def _update_tip(self):
     #     # ## Flag indicates successful diffusion
@@ -885,34 +887,34 @@ class Head:
     
     ##########################################################################################################
 
-    def _free_energy(self, tip_location, state):
-        """Free energy of the Head
+    # def _free_energy(self, tip_location, state):
+    #     """Free energy of the Head
 
-        Takes:
-            tip_location: relative Crown to Actin distance (x,y)
-            state: kinetic state of the cross-bridge, ['free'|'loose'|'tight']
-        Returns:
-            energy: free energy of the head in the given state
+    #     Takes:
+    #         tip_location: relative Crown to Actin distance (x,y)
+    #         state: kinetic state of the cross-bridge, ['free'|'loose'|'tight']
+    #     Returns:
+    #         energy: free energy of the head in the given state
             
             
-        values come from Pate and Cooke 1989 - "A model of crossbridge action: the effects of ATP, and Pi" page 186
+    #     values come from Pate and Cooke 1989 - "A model of crossbridge action: the effects of ATP, and Pi" page 186
             
-        """
+    #     """
         
-        k_t = self.k_t
+    #     k_t = self.k_t
         
-        if state == "free_2":
-            return 0
-        if state == "SRX":
-            return 0
-        elif state == "DRX":
-            return -2.3
-        elif state == "loose":
-            return -4.3 + self.energy(tip_location, state)/k_t
-        elif state == "tight_1":
-            return -4.3 + -16.6 + self.energy(tip_location, state)/k_t
-        elif state == "tight_2":
-            return -4.3 + -16.6 + -2.12 + self.energy(tip_location, state)/k_t
+    #     if state == "free_2":
+    #         return 0
+    #     if state == "SRX":
+    #         return 0
+    #     elif state == "DRX":
+    #         return -2.3
+    #     elif state == "loose":
+    #         return -4.3 + self.energy(tip_location, state)/k_t
+    #     elif state == "tight_1":
+    #         return -4.3 + -16.6 + self.energy(tip_location, state)/k_t
+    #     elif state == "tight_2":
+    #         return -4.3 + -16.6 + -2.12 + self.energy(tip_location, state)/k_t
 
     @staticmethod
     def _seg_values(tip_location):
@@ -937,7 +939,9 @@ class Crossbridge(Head):
                     'mh_g_k2': "pN/nm", 'mh_g_k3': "pN/nm", 'mh_g_k4': "pN/nm", 'mh_g_r2': "nm", 'mh_g_r3': "nm", 'mh_g_r4': "nm",
                     "mh_br": "au", 
                     "mh_dr": "au",
-                    'mh_srx': "au"}
+                    'mh_srx': "au",
+                    'mh_r34': "au",
+                    'mh_r23': "au"}
 
     def __init__(self, index, parent_face, thin_face, **mh_params):
         """Set up the cross-bridge
@@ -1186,130 +1190,72 @@ class Crossbridge(Head):
         return tip_axial_loc - xb_axial_loc, lattice_spacing
 
     def _process_params(self, mh_params):
+        
+        
         """converter definitions"""
-
-
         # converter k_strong_state
         key = 'mh_c_ks'
         if key in mh_params.keys():
             self.c.k_s = mh_params.pop(key)
         self.constants[key] = self.c.k_s
-
         # converter k_weak_state
         key = 'mh_c_kw'
         if key in mh_params.keys():
             self.c.k_w = mh_params.pop(key)
         self.constants[key] = self.c.k_w
-
         # converter rest_weak_state
         key = 'mh_c_rw'
         if key in mh_params.keys():
             self.c.r_w = mh_params.pop(key)
         self.constants[key] = self.c.r_w
-
         # converter rest_strong_state
         key = 'mh_c_rs'
         if key in mh_params.keys():
             self.c.r_s = mh_params.pop(key)
         self.constants[key] = self.c.r_s
 
-        """globular definitions"""
 
+
+        """globular definitions"""
         # globular k_strong_state
         key = 'mh_g_ks'
         if key in mh_params.keys():
             self.g.k_s = mh_params.pop(key)
         self.constants[key] = self.g.k_s
-
         # globular k_weak_state
         key = 'mh_g_kw'
         if key in mh_params.keys():
             self.g.k_w = mh_params.pop(key)
         self.constants[key] = self.g.k_w
-
         # globular rest_weak_state
         key = 'mh_g_rw'
         if key in mh_params.keys():
             self.g.r_w = mh_params.pop(key)
         self.constants[key] = self.g.r_w
-
         # globular rest_strong_state
         key = 'mh_g_rs'
         if key in mh_params.keys():
             self.g.r_s = mh_params.pop(key)
         self.constants[key] = self.g.r_s
-        # # converter k_ loose 
-        # key = 'mh_c_k2'
-        # if key in mh_params.keys():
-        #     self.c.k_s = mh_params.pop(key)
-        # self.constants[key] = self.c.k_2
 
-        # # converter k_ tight 1
-        # key = 'mh_c_k3'
-        # if key in mh_params.keys():
-        #     self.c.k_w = mh_params.pop(key)
-        # self.constants[key] = self.c.k_3
-        
-        # # converter k_ tight 2
-        # key = 'mh_c_k4'
-        # if key in mh_params.keys():
-        #     self.c.k_w = mh_params.pop(key)
-        # self.constants[key] = self.c.k_4
-
-        # # converter rest_ loose 
-        # key = 'mh_c_r2'
-        # if key in mh_params.keys():
-        #     self.c.r_w = mh_params.pop(key)
-        # self.constants[key] = self.c.r_2
-
-
-
-        """globular definitions"""
-
-        # # globular k_strong_state
-        # key = 'mh_g_k2'
-        # if key in mh_params.keys():
-        #     self.g.k_s = mh_params.pop(key)
-        # self.constants[key] = self.g.k_2
-
-        # # globular k_weak_state
-        # key = 'mh_g_k3'
-        # if key in mh_params.keys():
-        #     self.g.k_w = mh_params.pop(key)
-        # self.constants[key] = self.g.k_3
-
-        # # globular k_weak_state
-        # key = 'mh_g_k4'
-        # if key in mh_params.keys():
-        #     self.g.k_w = mh_params.pop(key)
-        # self.constants[key] = self.g.k_4
-
-        # # globular rest_weak_state
-        # key = 'mh_g_r2'
-        # if key in mh_params.keys():
-        #     self.g.r_w = mh_params.pop(key)
-        # self.constants[key] = self.g.r_2
-
-        # # globular rest_strong_state
-        # key = 'mh_g_r3'
-        # if key in mh_params.keys():
-        #     self.g.r_s = mh_params.pop(key)
-        # self.constants[key] = self.g.r_3
-
-        # # globular rest_strong_state
-        # key = 'mh_g_r4'
-        # if key in mh_params.keys():
-        #     self.g.r_s = mh_params.pop(key)
-        # self.constants[key] = self.g.r_4
-        
-        
-        ##
         
         # SRX rate modifier
         key = 'mh_srx'
         if key in mh_params.keys():
             self._srx = mh_params.pop(key)
         self.constants[key] = self._srx
+        
+        # rx,34 rate modifier factor
+        key = 'mh_r34'
+        if key in mh_params.keys():
+            self._mh_r34 = mh_params.pop(key)
+        self.constants[key] = self._mh_r34
+        
+        # rx,34 rate modifier factor
+        key = 'mh_r23'
+        if key in mh_params.keys():
+            self._mh_r23 = mh_params.pop(key)
+        self.constants[key] = self._mh_r23
         
         
         # binding rate modifier

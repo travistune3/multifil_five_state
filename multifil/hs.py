@@ -13,6 +13,8 @@ import time
 import scipy.sparse as sparse
 
 from scipy.sparse.linalg import spsolve 
+import scipy
+# import torch 
 
 import numpy.linalg
 from numba import njit
@@ -25,11 +27,17 @@ from . import ti
 
 import pdb
 
-def expm_(a):
-    q = 6
+def expm_(a, q=2):
+    
+    '''
+    Matrix exponential, based on squaring/scaling pade approximation
+    
+    '''
+    # q = 6
     a2 = a.copy()
     a_norm = np.max(np.sum(np.abs(a2), axis=1)) #np.linalg.norm ( a2, ord = np.inf )
     ee = ( int ) ( np.log2 ( a_norm ) ) + 1
+    # exp(A) = (exp(A/s))**s
     s = max ( 0, ee + 1 )
     a2 = a2 / ( 2.0 ** s )
     x = a2.copy()
@@ -50,13 +58,18 @@ def expm_(a):
         else:
             d = d - c * x
         p = not p
-        
+    
+    # we want e/d - Pade spporximataiton is ratio of two polynomials, e and d
     e = np.linalg.solve(d,e)
     
-    for k in range ( 0, s ):
-        # e = np.einsum('mij,mjk->mik',e,e)
-        e = numba_dot(e,e)
+    # square TO GEt back answer
+    e = np.linalg.matrix_power(e, 2**s)
+
+    # for k in range ( 0, s ):
+    #     e = numba_dot( e, e )
+        
     return e
+
 
 @njit
 def numba_dot(a,b):
@@ -191,7 +204,7 @@ class hs:
         # Syntax for multiple profiles
         # module _ iso (isomer)
         """
-
+        
         # Titin constants
         # Isomer-available
         valid_ti_params = ti.Titin.VALID_PARAMS
@@ -525,11 +538,16 @@ class hs:
         self.V = self.spring_boundary_conditions()
         
         # initaizle the half sarc geometry 
-        # bassically self.timestep, but with dt = 1000 ms
+        # bassically self.timestep, but with dt = 100-100ms ms
         # Use Newton method to solve for the new spring configuration
         # do this before any binding to deal with titin's configuration
+        # self.settle()
         self.Newton()
+        # initialize to (the approximate) steady state 
+        # basically assuming the past under constant everything with condtions defined by t=0
+        # 'steady state' but it doesnt account for cooperativity, so it's only approximate
         for _ in range(10):
+            pass
             # set which tm sites are subject to cooperative effects
             self.set_subject_to_cooperativity()
             # assign each xb its nearest neighbor binding site
@@ -540,9 +558,6 @@ class hs:
             self.thick_transitions(dt = 100)
             # Use Newton method to solve for the new spring configuration 
             self.Newton()
-        
-        
-        
         
         
         
@@ -952,7 +967,9 @@ class hs:
             i.extend([60*thick.index + 59])
             j.extend([60*thick.index + 59])
             # multiply by 6 because each thick filament is attached to the z disk by 6 titin filaments, they have identical stiffness
-            Jac.extend([- 6 * thick.thick_faces[0].titin_fil.stiffness() ])
+            # Jac.extend([- 6 * thick.thick_faces[0].titin_fil.stiffness() ])
+            Jac.extend([- 6 * thick.thick_faces[0].titin_fil.dForce_dMnode(thick.axial[-1])])
+            
             for cr in thick.crowns:
                 for xb in cr.crossbridges:
                     if xb.state in {'loose', 'tight_1', 'tight_2'}:
@@ -1021,6 +1038,17 @@ class hs:
         # Use Newton method to solve for the new spring configuration 
         self.Newton()
         
+                
+        xbs = [xb for th in self.thick for cr in th.crowns for xb in cr.crossbridges if xb.bound_to is not None ]
+        bs = np.array([xb.nearest.axial_location - xb.axial_location for xb in xbs])
+
+        # if len(xbs)!=0:
+        #     plt.hist(bs)
+        #     plt.show()
+            
+            # pdb.set_trace()
+
+        
         return
         
     
@@ -1073,6 +1101,7 @@ class hs:
         # we also need caclium concentration in molar
         ca = self.ca 
         
+        # pdb.set_trace()
         # get the [720 x 4 x 4] array of Q matricies 
         Q = self.binding_site_rate_matix(tm_site_constants, ca)
         
@@ -1144,8 +1173,6 @@ class hs:
         reverse rates are defined as forward_rates/Equilibrium rates
         
         '''
-        
-        
         
         # get the equilibrium reaction rates 
         _K1 = tm_site_constants[:,0]
@@ -1287,7 +1314,7 @@ class hs:
     
       
     @staticmethod
-    @njit
+    # @njit
     def xb_rate_matrix(bs, V, rate_factors, ap, ca_c, temp):
         
         '''
@@ -1313,10 +1340,14 @@ class hs:
         Arguments are:
             bs: (x,y) distance between xb and bs
             V: spring constants of each of the two spings, for each xb, in each state (2*2*2) -> (8 x 720) array
-            rate_factors: multiply certain xbs with rate factors, see hs_params in hs.py and mh_params in mh.py:
-                rate_factors[:,0] -> rsrx (r16)
-                rate_factors[:,1] -> r12
-                rate_factors[:,2] -> r45 
+            rate_factors: multiply certain xbs with rate factors, see hs_params in hs.py and mh_params in mh.py, 
+                and see rate_factors in hs.thick_transitions() for which are which:
+                    rate_factors = np.array([list((                     
+                        xb.constants['mh_br'],                          r12  0 
+                        xb.constants['mh_r34'],                         r34  1 
+                        xb.constants['mh_dr'],                          r45  2 
+                        xb.constants['mh_srx'])) for xb in xbs])        r16  3 
+                
             ap: binding site availability
             ca_c: calcium concentration in uM
             temp: temp in degree c
@@ -1345,6 +1376,16 @@ class hs:
         U_tight_1 = -4.3 + -14.3 + E_strong
         U_tight_2 = -4.3 + -14.3 + -2.12 + E_strong
         
+        f_3_4 = V[:,4] * (r -  V[:,5])  +  1/r * V[:,6] * (theta - V[:,7])
+        f_3_4_x = V[:,4] * (r -  V[:,5]) * np.cos(theta)  + 1/r * V[:,6] * (theta - V[:,7]) * np.sin(theta)
+        
+        f_2 = V[:,0] * (r -  V[:,1])  +  1/r * V[:,2] * (theta - V[:,3])
+        f_2_x = V[:,0] * (r -  V[:,1]) * np.cos(theta)  + 1/r * V[:,2] * (theta - V[:,3]) * np.sin(theta)
+        
+        
+        # f_x = (g_k * (g_len - g_s) * m.cos(c_ang) +
+               # 1 / g_len * c_k * (c_ang - c_s) * m.sin(c_ang))
+        
         ############################################################################################################################################
         #
         #
@@ -1363,27 +1404,30 @@ class hs:
         
         # DRX (1) <-> free (2)
         tau = .72
-        r12 = rate_factors[:,1] * tau * np.exp( -E_weak ); r12[np.isnan(r12)] = 0
+        r12 = rate_factors[:,0] * tau * np.exp( -E_weak ); r12[np.isnan(r12)] = 0
         r21 = (r12 + .005) / np.exp(U_DRX - U_loose); r21[r21>upper] = upper; r21[np.isnan(r21)] = upper
         
         # free (2) <-> tight_1 (3)
-        r23 = (0.6 *  # reduce overall rate
-                (1 +  # shift rate up to avoid negative rate
+        r23 =  rate_factors[:,4] *( (0.6 *  # reduce overall rate
+                (1+# shift rate up to avoid negative rate
                   np.tanh(5 +  # move center of transition to right
-                        0.4 * (E_weak - E_strong)))) + .05; r23[np.isnan(r23)] = 0
+                        0.4 * (E_weak - E_strong)) #- 
+                  # np.tanh(-5 +  # move center of transition to right
+                  #       0.4 * (E_weak - E_strong))
+                   )) + .05); r23[np.isnan(r23)] = 0
         r32 = r23 / np.exp(U_loose - U_tight_1); r32[r32>upper] = upper
         
         # tight_1 (3) <-> tight_2 (4)
         A = 1
-        r34 = A * .5 * (1 + np.tanh(E_weak - E_strong)) + .03
-        r43 = r34 / np.exp(U_tight_1 - U_tight_2)
+        r34 = rate_factors[:,1] * (A * .5 * (1 + np.tanh(E_weak - E_strong)) + .03) + np.exp(-f_3_4); r34[r34>upper] = upper
+        r43 = r34 / np.exp(U_loose - U_tight_2); r43[r43>upper] = upper
         
         # tight_1 (4) <-> free_2 (5)
-        r45 = rate_factors[:,2] * .05 * np.sqrt(U_tight_2 + 23) 
+        r45 = rate_factors[:,2] * .5 * np.sqrt(U_tight_2 + 23) + np.exp(-f_3_4); r45[r45>upper] = upper
         r54 = 0 * ones
         
         # free_2 (5) <-> DRX (1)
-        r51 = .1 * ones
+        r51 = .1 * ones 
         r15 = .01 * ones
         
         # # SRX (6) <-> DRX (1)
@@ -1395,8 +1439,7 @@ class hs:
         # to drx
         r61 = (k_0 + ((k_max-k_0)*ca_c**b)/(Ca_50**b + ca_c**b)) * ones 
         # to srx
-        r16 = rate_factors[:,0] * .1 * ones   
-        
+        r16 = rate_factors[:,3] * .1 * ones   
         
         # diagonal rates should be set so that each row in the rate matrix sums to 0
         r11 = - (r12 * ap + r15 + r16)        
@@ -1445,6 +1488,7 @@ class hs:
         
         Q[:,5,0] = r61
         Q[:,5,5] = r66
+
 
         
         # the final array looks like
@@ -1622,7 +1666,16 @@ class hs:
             # rate_factors[:,0] -> mh_srx (r16)
             # rate_factors[:,1] -> mh_br (r12)
             # rate_factors[:,2] -> mf_dr (r45)
-        rate_factors = np.array([list(xb.constants.values())[-3:] for xb in xbs])
+        # pdb.set_trace()
+        rate_factors = np.array([list((
+            xb.constants['mh_br'],
+            xb.constants['mh_r34'],
+            xb.constants['mh_dr'],
+            xb.constants['mh_srx'],
+            xb.constants['mh_r23'],
+            )) for xb in xbs])
+        
+        # rate_factors = np.array([list(xb.constants.values()) for xb in xbs])
 
         # list of actin bs availability status
         ap = np.array([xb.nearest.permissiveness for th in self.thick for cr in th.crowns for xb in cr.crossbridges])
@@ -1634,11 +1687,16 @@ class hs:
         # each row in each Q should sum to 0
         # if it doesn't you fucked up
         # don't manipulate Q outsied of xb_rate_matrix function
-        assert(np.max(np.abs(np.sum(Q[:,:,:], axis = 2)))<10**-11)
+        # assert(np.max(np.abs(np.sum(Q[:,:,:], axis = 2)))<10**-11)
+        if ~(np.max(np.abs(np.sum(Q[:,:,:], axis = 2)))<10**-11):
+            pdb.set_trace()
 
         # From rate matricies Q, we get the Prob matrices P
         # P is the (720 x 6 x 6) array of Prob matricies, each 6 by 6 slice is the transition PROBABILITY matrix of one of the 720 xbs
-        P = expm_(Q * dt) #self.xbs_probs_from_rates(Q, bs, ap, dt, old_states)
+        P = expm_(Q * dt, q=3) #self.xbs_probs_from_rates(Q, bs, ap, dt, old_states)
+        
+        # pdb.set_trace()
+        # print(np.max(np.abs(np.array([scipy.linalg.expm(q*dt) for q in Q]) - expm_(Q*dt, q=0))))
         
         # for each of the 6,6 probability matrices, we want the row which corresponds to that xbs current state, 
         # for example since P is a matrix with values Pij, we want row i since we want transition probabilities from state i to j
@@ -1817,17 +1875,25 @@ class hs:
             # solve(a,b) is faster taking inverse
             new_guess = guess - spsolve(J, F)
             
+            if np.any(np.isnan(new_guess)):
+                pdb.set_trace()
+            
             # update new axial spacings
             self.Update_axial_locations(new_guess)
                      
             # find new F - rerun if max(abs(F)) < cut-off value of .06 pN  
             F = np.concatenate((np.concatenate([i.axial_force() for i in self.thick]), 
                                          np.concatenate([i.axial_force() for i in self.thin])))
+            
+            F_ = self.Force_on_each_node()
+            
             num = num + 1
             if num > 100:
+                # pdb.set_trace()
                 # this should never happen, if it does something is wrong
                 print('failed to converge after ' + str(num) + ' steps, max f = ' + str(np.max(np.abs(F))))
                 # revert to old method
+                # pdb.set_trace()
                 self.settle()
                 break
             
